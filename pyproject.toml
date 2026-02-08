@@ -1,0 +1,17 @@
+[project]
+name = "pinsheet-scanner"
+version = "0.1.0"
+description = "A tool to scan and analyze pin sheets of bowling matches."
+readme = "README.md"
+authors = [
+    { name = "Hohnik", email = "mail@niklashohn.com" }
+]
+requires-python = ">=3.13"
+dependencies = []
+
+[project.scripts]
+pinsheet-scanner = "pinsheet_scanner:main"
+
+[build-system]
+requires = ["uv_build>=0.9.26,<0.10.0"]
+build-backend = "uv_build"
