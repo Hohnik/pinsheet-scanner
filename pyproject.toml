@@ -1,13 +1,23 @@
 [project]
 name = "pinsheet-scanner"
 version = "0.1.0"
-description = "A tool to scan and analyze pin sheets of bowling matches."
+description = "A tool to scan and analyze 9-pin bowling (Kegeln) score sheets using YOLO for pin diagram detection and classical CV for pin state classification."
 readme = "README.md"
 authors = [
     { name = "Hohnik", email = "mail@niklashohn.com" }
 ]
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "label-studio>=1.22.0",
+    "numpy>=2.4.2",
+    "opencv-python>=4.13.0.92",
+    "ultralytics>=8.3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.0.2",
+]
 
 [project.scripts]
 pinsheet-scanner = "pinsheet_scanner:main"
@@ -15,3 +25,6 @@ pinsheet-scanner = "pinsheet_scanner:main"
 [build-system]
 requires = ["uv_build>=0.9.26,<0.10.0"]
 build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
