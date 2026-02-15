@@ -28,6 +28,7 @@ Label pin diagrams in your scanned sheets in YOLO format, place them in `data/`,
 
 ```bash
 just train-detector
+# or: pinsheet-scanner train-detector
 ```
 
 Copy the best weights to `models/pin_diagram.pt`.
@@ -35,10 +36,25 @@ Copy the best weights to `models/pin_diagram.pt`.
 ### 2. Train the CNN classifier
 
 ```bash
-just debug-crops sheet.jpg   # extract crops from a score sheet
-just label                   # label them in the browser UI (1-9 toggle, Enter saves)
-just train-classifier        # train on labeled crops with online augmentation
-just accuracy                # measure per-pin and per-diagram accuracy
+# Extract crops from a score sheet
+just debug-crops sheet.jpg
+# or: pinsheet-scanner debug-crops sheet.jpg
+
+# Label the crops in the browser UI (1-9 keys to toggle pins, Enter to save)
+just label
+# or: pinsheet-scanner label
+
+# Tune hyperparameters with Optuna (saves best config to models/hyperparams.json)
+just tune --trials 20 --epochs 40
+# or: pinsheet-scanner tune --trials 20 --epochs 40
+
+# Run k-fold cross-validation and retrain final model on all data
+just kfold --folds 5 --epochs 60
+# or: pinsheet-scanner kfold --folds 5 --epochs 60
+
+# Validate accuracy against ground truth
+just accuracy
+# or: pinsheet-scanner accuracy
 ```
 
 Weights are saved to `models/pin_classifier.pt`.
@@ -47,9 +63,10 @@ Weights are saved to `models/pin_classifier.pt`.
 
 ```bash
 just scan sheet.jpg
+# or: pinsheet-scanner scan sheet.jpg
 ```
 
-### Python API
+## Python API
 
 ```python
 from pathlib import Path
@@ -76,9 +93,20 @@ print(f"Total: {result.total_pins}")
     8
 ```
 
-## Tasks
+## Commands
 
-Run `just` to see all available tasks.
+All commands are available via the unified `pinsheet-scanner` CLI:
+
+- `scan <image>`: Scan a score sheet and print results
+- `train-detector`: Train YOLO detector
+- `train-classifier`: Train CNN classifier (verbose)
+- `tune`: Hyperparameter tuning with Optuna
+- `kfold`: K-fold cross-validation
+- `debug-crops <image>`: Extract and classify crops
+- `label`: Open labeling UI
+- `accuracy`: Validate against ground truth
+
+Run `pinsheet-scanner --help` or `just` for full details.
 
 ## License
 
