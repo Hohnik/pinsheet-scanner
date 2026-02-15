@@ -31,7 +31,7 @@ typecheck:
 # ── Training ─────────────────────────────────────────────────────
 
 # Train the CNN pin classifier on real labeled crops
-train-classifier *args:
+train *args:
     uv run pinsheet-scanner train-classifier {{ args }}
 
 # Hyperparameter tuning with Optuna
@@ -52,8 +52,8 @@ train-detector *args:
 scan image *args:
     uv run pinsheet-scanner scan {{ image }} {{ args }}
 
-# Save debug crops from a score sheet image
-debug-crops image *args:
+# Extract crops from a score sheet image
+extract image *args:
     uv run pinsheet-scanner debug-crops {{ image }} {{ args }}
 
 # ── Labeling & Validation ────────────────────────────────────────

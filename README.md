@@ -39,7 +39,7 @@ Place new scanned score sheets in the `sheets/` folder (or anywhere accessible),
 
 ```bash
 # Extract crops from a score sheet
-just debug-crops sheets/new_sheet.jpg
+just extract sheets/new_sheet.jpg
 # or: pinsheet-scanner debug-crops sheets/new_sheet.jpg
 
 # Label the crops in the browser UI (1-9 keys to toggle pins, Enter to save)
@@ -104,7 +104,7 @@ All commands are available via the unified `pinsheet-scanner` CLI:
 - `train-classifier`: Train CNN classifier (verbose)
 - `tune`: Hyperparameter tuning with Optuna
 - `kfold`: K-fold cross-validation
-- `debug-crops <image>`: Extract and classify crops
+- `extract <image>`: Extract and classify crops
 - `label`: Open labeling UI
 - `accuracy`: Validate against ground truth
 
