@@ -23,9 +23,14 @@ def _conv_block(in_ch: int, out_ch: int) -> list[nn.Module]:
 
 
 class PinClassifier(nn.Module):
-    """Tiny CNN that predicts 9 independent pin states from a diagram crop."""
+    """Tiny CNN that predicts 9 independent pin states from a diagram crop.
 
-    def __init__(self) -> None:
+    Args:
+        dropout: Drop probability applied before the final linear layer.
+            Defaults to 0.3.
+    """
+
+    def __init__(self, dropout: float = 0.3) -> None:
         super().__init__()
         self.features = nn.Sequential(
             *_conv_block(1, 32),  # 1×64×64 → 32×32×32
@@ -35,7 +40,7 @@ class PinClassifier(nn.Module):
         )
         self.pool = nn.AdaptiveAvgPool2d(1)
         self.head = nn.Sequential(
-            nn.Dropout(0.3),
+            nn.Dropout(dropout),
             nn.Linear(128, NUM_PINS),
         )
 

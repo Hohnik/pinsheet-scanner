@@ -26,13 +26,6 @@ import torch
 from .constants import CLASSIFIER_INPUT_SIZE
 from .model import PinClassifier
 
-__all__ = [
-    "load_classifier",
-    "preprocess_crop",
-    "resolve_device",
-    "classify_pins_batch_with_confidence",
-]
-
 
 def resolve_device(device: torch.device | str | None) -> torch.device:
     """Pick the best available device when *device* is ``None``."""
@@ -62,7 +55,7 @@ def load_classifier(
     if not weights_path.exists():
         raise FileNotFoundError(
             f"Classifier weights not found at {weights_path}. "
-            "Train a model first (see scripts/train_classifier.py) or pass --classifier-model."
+            "Train a model first (see `pinsheet-scanner train-classifier`) or pass --classifier-model."
         )
 
     resolved = resolve_device(device)

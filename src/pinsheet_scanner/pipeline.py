@@ -80,7 +80,7 @@ def process_sheet(
     if not model_path.exists():
         raise FileNotFoundError(
             f"Model weights not found at {model_path}. "
-            "Train a model first (see scripts/train.py) or pass --model."
+            "Train a model first (see `pinsheet-scanner train-detector`) or pass --model."
         )
 
     image = cv2.imread(str(image_path))

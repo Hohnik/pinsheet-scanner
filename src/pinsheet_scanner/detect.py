@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import cv2
 import numpy as np
@@ -38,20 +39,25 @@ class Detection:
         return int(self.y_center + self.height / 2)
 
 
-def load_model(weights_path: Path):  # -> YOLO
-    """Load a trained YOLO model from *weights_path*."""
+def load_model(weights_path: Path) -> Any:
+    """Load a trained YOLO model from *weights_path*.
+
+    Returns an ``ultralytics.YOLO`` instance.  The return type is
+    :data:`~typing.Any` because ultralytics is an optional runtime
+    dependency and we don't want to force an import at module level.
+    """
     from ultralytics import YOLO as _YOLO  # type: ignore[attr-defined]  # noqa: N811
 
     return _YOLO(str(weights_path))
 
 
 def detect_pin_diagrams(
-    model: object,
+    model: Any,
     image: np.ndarray,
     confidence_threshold: float = 0.25,
 ) -> list[Detection]:
     """Run YOLO inference and return pin diagram detections (unsorted)."""
-    results = model(image, conf=confidence_threshold, verbose=False)  # type: ignore[operator]
+    results = model(image, conf=confidence_threshold, verbose=False)
 
     detections: list[Detection] = []
     for result in results:

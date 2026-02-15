@@ -1,0 +1,7 @@
+{
+  "lr": 0.0007896186801026692,
+  "weight_decay": 2.1930485556643678e-05,
+  "dropout": 0.1260206371941118,
+  "batch_size": 16,
+  "scheduler": "onecycle"
+}

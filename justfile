@@ -32,36 +32,36 @@ typecheck:
 
 # Train the CNN pin classifier on real labeled crops
 train-classifier *args:
-    uv run python -m scripts.train_classifier {{ args }}
+    uv run pinsheet-scanner train-classifier {{ args }}
 
-# Retrain from scratch on real crops
-retrain:
-    uv run python -m scripts.train_classifier
+# Hyperparameter tuning with Optuna
+tune *args:
+    uv run pinsheet-scanner tune {{ args }}
+
+# K-fold cross-validation for the CNN classifier
+kfold *args:
+    uv run pinsheet-scanner kfold {{ args }}
 
 # Train the YOLO detector for pin diagram bounding boxes
 train-detector *args:
-    uv run python -m scripts.train {{ args }}
+    uv run pinsheet-scanner train-detector {{ args }}
 
 # ── Inference ─────────────────────────────────────────────────────
 
 # Scan a score sheet and print results
 scan image *args:
-    uv run pinsheet-scanner {{ image }} {{ args }}
+    uv run pinsheet-scanner scan {{ image }} {{ args }}
 
 # Save debug crops from a score sheet image
 debug-crops image *args:
-    uv run python -m scripts.debug_crops {{ image }} {{ args }}
+    uv run pinsheet-scanner debug-crops {{ image }} {{ args }}
 
 # ── Labeling & Validation ────────────────────────────────────────
 
 # Open the labeling UI to annotate ground-truth pin states
 label *args:
-    uv run python -m scripts.label {{ args }}
+    uv run pinsheet-scanner label {{ args }}
 
 # Compare ground-truth labels against CNN predictions
 accuracy *args:
-    uv run python -m scripts.validate_labels {{ args }}
-
-# Run CNN on real crops and print per-crop predictions + confidence
-validate:
-    uv run python -m scripts.debug_crops pinsheet_example.jpeg --output debug_crops
+    uv run pinsheet-scanner accuracy {{ args }}

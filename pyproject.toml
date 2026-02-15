@@ -10,7 +10,10 @@ requires-python = ">=3.13"
 dependencies = [
     "numpy>=2.4.2",
     "opencv-python>=4.13.0.92",
+    "optuna>=4.7.0",
+    "scikit-learn>=1.8.0",
     "torch>=2.0.0",
+    "typer>=0.23.1",
     "ultralytics>=8.3.0",
 ]
 
@@ -21,7 +24,7 @@ dev = [
 ]
 
 [project.scripts]
-pinsheet-scanner = "pinsheet_scanner:main"
+pinsheet-scanner = "pinsheet_scanner.cli:app"
 
 [build-system]
 requires = ["uv_build>=0.9.26,<0.10.0"]

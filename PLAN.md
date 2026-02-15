@@ -22,7 +22,7 @@ crops, and label them:
 ```sh
 just debug-crops new_sheet.jpg
 just label
-just retrain
+just train-classifier
 just accuracy
 ```
 
