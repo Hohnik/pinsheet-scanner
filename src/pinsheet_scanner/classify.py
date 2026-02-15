@@ -30,9 +30,6 @@ __all__ = [
     "load_classifier",
     "preprocess_crop",
     "resolve_device",
-    "classify_pins",
-    "classify_pins_batch",
-    "classify_pins_with_confidence",
     "classify_pins_batch_with_confidence",
 ]
 
@@ -146,60 +143,3 @@ def classify_pins_batch_with_confidence(
         )
         for i in range(probs.size(0))
     ]
-
-
-# ---------------------------------------------------------------------------
-# Thin wrappers
-# ---------------------------------------------------------------------------
-
-
-def classify_pins_batch(
-    model: PinClassifier,
-    crops: list[np.ndarray],
-    *,
-    device: torch.device | None = None,
-    threshold: float = 0.5,
-) -> list[list[int]]:
-    """Classify pin states for a batch of crops (without confidence)."""
-    return [
-        pins
-        for pins, _ in classify_pins_batch_with_confidence(
-            model,
-            crops,
-            device=device,
-            threshold=threshold,
-        )
-    ]
-
-
-def classify_pins_with_confidence(
-    model: PinClassifier,
-    crop: np.ndarray,
-    *,
-    device: torch.device | None = None,
-    threshold: float = 0.5,
-) -> tuple[list[int], float]:
-    """Classify the 9 pin states in a single crop, returning confidence."""
-    return classify_pins_batch_with_confidence(
-        model,
-        [crop],
-        device=device,
-        threshold=threshold,
-    )[0]
-
-
-def classify_pins(
-    model: PinClassifier,
-    crop: np.ndarray,
-    *,
-    device: torch.device | None = None,
-    threshold: float = 0.5,
-) -> list[int]:
-    """Classify the 9 pin states in a single cropped diagram."""
-    pins, _ = classify_pins_with_confidence(
-        model,
-        crop,
-        device=device,
-        threshold=threshold,
-    )
-    return pins
