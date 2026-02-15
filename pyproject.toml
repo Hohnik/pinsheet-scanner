@@ -1,7 +1,7 @@
 [project]
 name = "pinsheet-scanner"
 version = "0.1.0"
-description = "A tool to scan and analyze 9-pin bowling (Kegeln) score sheets using YOLO for pin diagram detection and classical CV for pin state classification."
+description = "Extract 9-pin bowling (Kegeln) scores from scanned score sheets using YOLO for detection and a CNN classifier for pin state classification."
 readme = "README.md"
 authors = [
     { name = "Hohnik", email = "mail@niklashohn.com" }
@@ -10,7 +10,7 @@ requires-python = ">=3.13"
 dependencies = [
     "numpy>=2.4.2",
     "opencv-python>=4.13.0.92",
-    "pytesseract>=0.3.10",
+    "torch>=2.0.0",
     "ultralytics>=8.3.0",
 ]
 
@@ -18,9 +18,6 @@ dependencies = [
 dev = [
     "pytest>=9.0.2",
     "ruff>=0.8.0",
-]
-label = [
-    "label-studio>=1.22.0",
 ]
 
 [project.scripts]
@@ -32,3 +29,6 @@ build-backend = "uv_build"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "integration: end-to-end tests that require trained model weights",
+]

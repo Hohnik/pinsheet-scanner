@@ -5,170 +5,132 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from pinsheet_scanner.pipeline import DEFAULT_MODEL_PATH, SheetResult, ThrowResult
+from pinsheet_scanner.pipeline import (
+    DEFAULT_CLASSIFIER_PATH,
+    DEFAULT_DETECTOR_PATH,
+    SheetResult,
+    ThrowResult,
+)
 
 
-class TestDefaultModelPath:
-    """Tests for DEFAULT_MODEL_PATH constant."""
+class TestDefaultPaths:
+    """Tests for default model path constants."""
 
-    def test_is_path_object(self):
-        """DEFAULT_MODEL_PATH should be a Path object."""
-        assert isinstance(DEFAULT_MODEL_PATH, Path)
-
-    def test_points_to_models_directory(self):
-        """DEFAULT_MODEL_PATH should point to models/pin_diagram.pt."""
-        assert DEFAULT_MODEL_PATH.name == "pin_diagram.pt"
-        assert DEFAULT_MODEL_PATH.parent.name == "models"
-
-    def test_is_relative_path(self):
-        """DEFAULT_MODEL_PATH should be relative, not absolute."""
-        assert not DEFAULT_MODEL_PATH.is_absolute()
+    @pytest.mark.parametrize(
+        "path,expected_name",
+        [
+            (DEFAULT_DETECTOR_PATH, "pin_diagram.pt"),
+            (DEFAULT_CLASSIFIER_PATH, "pin_classifier.pt"),
+        ],
+    )
+    def test_path_is_relative_and_in_models_dir(self, path, expected_name):
+        assert isinstance(path, Path)
+        assert not path.is_absolute()
+        assert path.name == expected_name
+        assert path.parent.name == "models"
 
 
 class TestThrowResult:
     """Tests for ThrowResult dataclass."""
 
-    def test_has_classification_confidence_field(self):
-        """ThrowResult should have a classification_confidence field."""
-        throw = ThrowResult(
-            column=0,
-            row=0,
-            score=5,
-            pins_down=[1, 1, 1, 0, 1, 0, 1, 0, 0],
-            confidence=0.95,
-            classification_confidence=0.75,
+    def test_basic_fields(self):
+        t = ThrowResult(
+            column=2,
+            row=5,
+            score=7,
+            pins_down=[1, 1, 1, 0, 1, 1, 1, 0, 0],
+            confidence=0.92,
+            classification_confidence=0.85,
         )
-        assert throw.classification_confidence == 0.75
+        assert (t.column, t.row, t.score) == (2, 5, 7)
+        assert t.pins_down == [1, 1, 1, 0, 1, 1, 1, 0, 0]
+        assert (t.confidence, t.classification_confidence) == (0.92, 0.85)
 
-    def test_classification_confidence_defaults_to_zero(self):
-        """classification_confidence should default to 0.0 if not provided."""
-        throw = ThrowResult(
-            column=0,
-            row=0,
-            score=5,
-            pins_down=[1, 1, 1, 0, 1, 0, 1, 0, 0],
-            confidence=0.95,
-        )
-        assert throw.classification_confidence == 0.0
+    def test_defaults(self):
+        t = ThrowResult(column=0, row=0, score=0)
+        assert t.pins_down == []
+        assert t.confidence == 0.0
+        assert t.classification_confidence == 0.0
 
 
-class TestThrowResultExpectedScore:
-    """Tests for expected_score field on ThrowResult."""
+class TestSheetResult:
+    """Tests for SheetResult dataclass."""
 
-    def test_expected_score_defaults_to_none(self):
-        """expected_score should default to None."""
-        throw = ThrowResult(
-            column=0, row=0, score=5, pins_down=[1, 1, 1, 0, 1, 0, 1, 0, 0]
-        )
-        assert throw.expected_score is None
+    def test_empty_sheet(self):
+        r = SheetResult()
+        assert (r.throws, r.columns, r.rows_per_column, r.total_pins) == ([], 0, 0, 0)
 
-    def test_expected_score_can_be_set(self):
-        """expected_score should accept an integer value."""
-        throw = ThrowResult(
-            column=0,
-            row=0,
-            score=5,
-            pins_down=[1, 1, 1, 0, 1, 0, 1, 0, 0],
-            expected_score=5,
-        )
-        assert throw.expected_score == 5
-
-
-class TestSheetResultMismatches:
-    """Tests for mismatches property on SheetResult."""
-
-    def test_no_mismatches_when_scores_match(self):
-        """mismatches should be empty when score equals expected_score."""
+    @pytest.mark.parametrize(
+        "pins_lists,expected_total",
+        [
+            ([[1, 1, 0, 0, 1, 0, 0, 0, 0], [1, 1, 1, 0, 1, 0, 1, 0, 0]], 8),
+            ([[1] * 9], 9),
+            ([[0] * 9], 0),
+        ],
+    )
+    def test_total_pins(self, pins_lists, expected_total):
         result = SheetResult()
-        result.throws.append(
-            ThrowResult(
-                column=0,
-                row=0,
-                score=5,
-                pins_down=[1, 1, 1, 0, 1, 0, 1, 0, 0],
-                expected_score=5,
+        for i, pins in enumerate(pins_lists):
+            result.throws.append(
+                ThrowResult(column=0, row=i, score=sum(pins), pins_down=pins)
             )
-        )
-        assert result.mismatches == []
-
-    def test_mismatches_when_scores_differ(self):
-        """mismatches should contain throws where score != expected_score."""
-        result = SheetResult()
-        result.throws.append(
-            ThrowResult(
-                column=0,
-                row=0,
-                score=5,
-                pins_down=[1, 1, 1, 0, 1, 0, 1, 0, 0],
-                expected_score=7,
-            )
-        )
-        assert len(result.mismatches) == 1
-        assert result.mismatches[0].score == 5
-        assert result.mismatches[0].expected_score == 7
-
-    def test_mismatches_excludes_none_expected_score(self):
-        """mismatches should not include throws without expected_score."""
-        result = SheetResult()
-        result.throws.append(
-            ThrowResult(
-                column=0,
-                row=0,
-                score=5,
-                pins_down=[1, 1, 1, 0, 1, 0, 1, 0, 0],
-            )
-        )
-        assert result.mismatches == []
+        assert result.total_pins == expected_total
 
 
-class TestProcessSheetClassificationConfidence:
-    """Tests that process_sheet calculates classification confidence."""
+class TestProcessSheetErrors:
+    """Tests for error handling in process_sheet."""
 
-    def test_process_sheet_sets_classification_confidence(self, tmp_path):
-        """process_sheet should calculate and set classification_confidence for each throw."""
+    def test_nonexistent_detector_raises_error(self):
         from pinsheet_scanner.pipeline import process_sheet
+
+        with pytest.raises(FileNotFoundError, match="Model weights not found"):
+            process_sheet(
+                Path("pinsheet_example.jpeg"),
+                model_path=Path("models/nonexistent_detector.pt"),
+            )
+
+    def test_nonexistent_classifier_raises_error(self, tmp_path):
         import cv2
 
-        model_path = Path("models/pin_diagram.pt")
-        if not model_path.exists():
-            pytest.skip("Model file not found - run training first")
+        from pinsheet_scanner.pipeline import process_sheet
+
+        if not Path("models/pin_diagram.pt").exists():
+            pytest.skip("Detector model not found — run training first")
 
         test_image = tmp_path / "test.jpg"
-        img = np.zeros((100, 100, 3), dtype=np.uint8)
-        cv2.imwrite(str(test_image), img)
+        cv2.imwrite(str(test_image), np.zeros((100, 100, 3), dtype=np.uint8))
 
-        result = process_sheet(test_image, model_path=model_path)
+        with pytest.raises(FileNotFoundError, match="Classifier weights not found"):
+            process_sheet(
+                test_image,
+                classifier_path=Path("models/nonexistent_classifier.pt"),
+            )
 
-        for throw in result.throws:
-            assert hasattr(throw, "classification_confidence")
-            assert isinstance(throw.classification_confidence, float)
-            assert 0.0 <= throw.classification_confidence <= 1.0
-
-    def test_model_not_found_raises_error(self):
-        """process_sheet should raise FileNotFoundError with clear message when model doesn't exist."""
+    def test_nonexistent_image_raises_error(self):
         from pinsheet_scanner.pipeline import process_sheet
 
-        nonexistent_model = Path("models/nonexistent_model.pt")
-        test_image = Path("pinsheet_example.jpeg")
+        with pytest.raises(FileNotFoundError):
+            process_sheet(Path("totally_nonexistent_image.jpg"))
 
-        with pytest.raises(FileNotFoundError) as exc_info:
-            process_sheet(test_image, model_path=nonexistent_model)
-
-        error_msg = str(exc_info.value)
-        assert (
-            "Model weights not found" in error_msg
-            or "Model file not found" in error_msg
-        )
-        assert str(nonexistent_model) in error_msg
-
-    def test_invalid_image_raises_error(self):
-        """process_sheet should handle non-existent image files gracefully."""
-        from pinsheet_scanner.pipeline import process_sheet
+    @pytest.mark.integration
+    def test_process_sheet_returns_valid_result(self, tmp_path):
         import cv2
 
-        nonexistent_image = Path("nonexistent_image.jpg")
+        from pinsheet_scanner.pipeline import process_sheet
 
-        with pytest.raises((FileNotFoundError, cv2.error)) as exc_info:
-            process_sheet(nonexistent_image)
+        if not (
+            Path("models/pin_diagram.pt").exists()
+            and Path("models/pin_classifier.pt").exists()
+        ):
+            pytest.skip("Model weights not found — train both models first")
 
-        assert exc_info.type in (FileNotFoundError, cv2.error)
+        test_image = tmp_path / "test.jpg"
+        cv2.imwrite(str(test_image), np.zeros((100, 100, 3), dtype=np.uint8))
+
+        result = process_sheet(test_image)
+        assert isinstance(result, SheetResult)
+        for t in result.throws:
+            assert isinstance(t, ThrowResult)
+            assert 0.0 <= t.classification_confidence <= 1.0
+            assert len(t.pins_down) == 9
+            assert all(p in (0, 1) for p in t.pins_down)

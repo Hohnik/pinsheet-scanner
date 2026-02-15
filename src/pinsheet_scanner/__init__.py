@@ -1,4 +1,10 @@
-from pinsheet_scanner.classify import pins_from_diagram
+from pinsheet_scanner.classify import (
+    classify_pins,
+    classify_pins_batch,
+    classify_pins_batch_with_confidence,
+    classify_pins_with_confidence,
+    load_classifier,
+)
 from pinsheet_scanner.detect import (
     Detection,
     detect_pin_diagrams,
@@ -6,6 +12,22 @@ from pinsheet_scanner.detect import (
     sort_detections,
 )
 from pinsheet_scanner.pipeline import SheetResult, ThrowResult, process_sheet
+
+__all__ = [
+    "Detection",
+    "SheetResult",
+    "ThrowResult",
+    "classify_pins",
+    "classify_pins_batch",
+    "classify_pins_batch_with_confidence",
+    "classify_pins_with_confidence",
+    "detect_pin_diagrams",
+    "load_classifier",
+    "load_model",
+    "main",
+    "process_sheet",
+    "sort_detections",
+]
 
 
 def main() -> None:
@@ -20,10 +42,13 @@ def main() -> None:
         "image", type=Path, help="Path to the scanned score sheet image."
     )
     parser.add_argument(
-        "--model",
+        "--model", type=Path, default=None, help="YOLO detector weights (.pt)."
+    )
+    parser.add_argument(
+        "--classifier-model",
         type=Path,
         default=None,
-        help="Path to a trained YOLO model (.pt). Defaults to models/pin_diagram.pt in the project root.",
+        help="CNN classifier weights (.pt).",
     )
     parser.add_argument(
         "--confidence",
@@ -36,32 +61,14 @@ def main() -> None:
     result = process_sheet(
         image_path=args.image,
         model_path=args.model,
+        classifier_path=args.classifier_model,
         confidence=args.confidence,
     )
 
     print(f"Detected {len(result.throws)} throws across {result.columns} columns\n")
-
-    for throw in result.throws:
-        pins = "".join(str(p) for p in throw.pins_down)
+    for t in result.throws:
+        pins = "".join(str(p) for p in t.pins_down)
         print(
-            f"  Col {throw.column:>2} | "
-            f"Row {throw.row:>2} | "
-            f"Score {throw.score:>1} | "
-            f"Pins {pins} | "
-            f"Conf {throw.confidence:.2f}"
+            f"  Col {t.column:>2} | Row {t.row:>2} | Score {t.score:>1} | Pins {pins} | Det {t.confidence:.2f} | Cls {t.classification_confidence:.2f}"
         )
-
     print(f"\nTotal pins knocked down: {result.total_pins}")
-
-
-__all__ = [
-    "Detection",
-    "SheetResult",
-    "ThrowResult",
-    "detect_pin_diagrams",
-    "load_model",
-    "pins_from_diagram",
-    "process_sheet",
-    "sort_detections",
-    "main",
-]
