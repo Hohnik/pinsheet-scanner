@@ -18,19 +18,19 @@ from pinsheet_scanner.constants import NUM_PINS, PIN_POSITIONS
 from pinsheet_scanner.model import PinClassifier
 
 WEIGHTS_PATH = Path("models/pin_classifier.pt")
+FIXTURE_ALL_DOWN = Path("tests/fixtures/all_down.png")
+FIXTURE_ALL_STANDING = Path("tests/fixtures/all_standing.png")
 
 needs_weights = pytest.mark.skipif(
     not WEIGHTS_PATH.exists(), reason="Trained weights not available"
 )
 
 
-def _make_synthetic_crop(pins: list[int], w: int = 50, h: int = 40) -> np.ndarray:
-    """Render a clean synthetic crop matching the generator's geometry."""
-    img = np.full((h, w), 200, dtype=np.uint8)
-    for i, (nx, ny) in enumerate(PIN_POSITIONS):
-        cx, cy = int(nx * (w - 1)), int(ny * (h - 1))
-        axes = (4, 1) if pins[i] == 1 else (2, 2)
-        cv2.ellipse(img, (cx, cy), axes, 0, 0, 360, 40, -1)
+def _load_fixture(path: Path) -> np.ndarray:
+    """Load a real crop fixture as grayscale."""
+    img = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+    if img is None:
+        pytest.skip(f"Fixture not found: {path}")
     return img
 
 
@@ -70,57 +70,48 @@ class TestLoadClassifier:
 
 
 # ---------------------------------------------------------------------------
-# Single-image classification
+# Single-image classification — shape / contract checks
 # ---------------------------------------------------------------------------
 
 
 class TestClassifyPins:
     @needs_weights
-    @pytest.mark.parametrize(
-        "pins",
-        [
-            [1, 0, 1, 0, 1, 0, 1, 0, 1],
-            [1] * NUM_PINS,
-            [0] * NUM_PINS,
-        ],
-        ids=["mixed", "all_down", "all_standing"],
-    )
-    def test_returns_nine_binary_values(self, classifier, pins):
+    def test_returns_nine_binary_values(self, classifier):
         model, device = classifier
-        result = classify_pins(model, _make_synthetic_crop(pins), device=device)
+        crop = _load_fixture(FIXTURE_ALL_DOWN)
+        result = classify_pins(model, crop, device=device)
         assert len(result) == NUM_PINS
         assert all(p in (0, 1) for p in result)
 
     @needs_weights
     def test_all_down_correct(self, classifier):
         model, device = classifier
-        assert (
-            classify_pins(model, _make_synthetic_crop([1] * NUM_PINS), device=device)
-            == [1] * NUM_PINS
-        )
+        crop = _load_fixture(FIXTURE_ALL_DOWN)
+        assert classify_pins(model, crop, device=device) == [1] * NUM_PINS
 
     @needs_weights
     def test_all_standing_correct(self, classifier):
         model, device = classifier
-        assert (
-            classify_pins(model, _make_synthetic_crop([0] * NUM_PINS), device=device)
-            == [0] * NUM_PINS
-        )
+        crop = _load_fixture(FIXTURE_ALL_STANDING)
+        assert classify_pins(model, crop, device=device) == [0] * NUM_PINS
 
     @needs_weights
     def test_accepts_bgr_input(self, classifier):
         model, device = classifier
-        bgr = cv2.cvtColor(
-            _make_synthetic_crop([1, 0, 1, 0, 1, 0, 1, 0, 1]), cv2.COLOR_GRAY2BGR
-        )
-        assert len(classify_pins(model, bgr, device=device)) == NUM_PINS
+        gray = _load_fixture(FIXTURE_ALL_DOWN)
+        bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+        result = classify_pins(model, bgr, device=device)
+        assert len(result) == NUM_PINS
+        assert all(p in (0, 1) for p in result)
 
     @needs_weights
     @pytest.mark.parametrize("size", [(30, 25), (50, 40), (80, 60), (120, 100)])
     def test_various_crop_sizes(self, classifier, size):
         model, device = classifier
         crop = np.full((size[1], size[0]), 200, dtype=np.uint8)
-        assert len(classify_pins(model, crop, device=device)) == NUM_PINS
+        result = classify_pins(model, crop, device=device)
+        assert len(result) == NUM_PINS
+        assert all(p in (0, 1) for p in result)
 
 
 # ---------------------------------------------------------------------------
@@ -135,8 +126,8 @@ class TestClassifyPinsBatch:
         results = classify_pins_batch(
             model,
             [
-                _make_synthetic_crop([1] * NUM_PINS),
-                _make_synthetic_crop([0] * NUM_PINS),
+                _load_fixture(FIXTURE_ALL_DOWN),
+                _load_fixture(FIXTURE_ALL_STANDING),
             ],
             device=device,
         )
@@ -152,7 +143,7 @@ class TestClassifyPinsBatch:
     def test_single_item_batch(self, classifier):
         model, device = classifier
         results = classify_pins_batch(
-            model, [_make_synthetic_crop([1, 1, 0, 0, 1, 1, 0, 0, 1])], device=device
+            model, [_load_fixture(FIXTURE_ALL_DOWN)], device=device
         )
         assert len(results) == 1 and len(results[0]) == NUM_PINS
 
@@ -167,18 +158,18 @@ class TestConfidence:
     def test_single_returns_pins_and_confidence(self, classifier):
         model, device = classifier
         pins, conf = classify_pins_with_confidence(
-            model, _make_synthetic_crop([1, 0, 1, 0, 1, 0, 1, 0, 1]), device=device
+            model, _load_fixture(FIXTURE_ALL_DOWN), device=device
         )
         assert len(pins) == NUM_PINS
         assert isinstance(conf, float) and 0.0 <= conf <= 1.0
 
     @needs_weights
-    def test_clear_pattern_has_reasonable_confidence(self, classifier):
+    def test_clear_pattern_has_high_confidence(self, classifier):
         model, device = classifier
         _, conf = classify_pins_with_confidence(
-            model, _make_synthetic_crop([1] * NUM_PINS), device=device
+            model, _load_fixture(FIXTURE_ALL_DOWN), device=device
         )
-        assert conf > 0.3
+        assert conf > 0.5
 
     @needs_weights
     def test_batch_with_confidence(self, classifier):
@@ -186,8 +177,8 @@ class TestConfidence:
         results = classify_pins_batch_with_confidence(
             model,
             [
-                _make_synthetic_crop([1] * NUM_PINS),
-                _make_synthetic_crop([0] * NUM_PINS),
+                _load_fixture(FIXTURE_ALL_DOWN),
+                _load_fixture(FIXTURE_ALL_STANDING),
             ],
             device=device,
         )
@@ -204,7 +195,7 @@ class TestConfidence:
 
 
 # ---------------------------------------------------------------------------
-# Real fixture
+# Real fixture (legacy path, kept for backward compat)
 # ---------------------------------------------------------------------------
 
 

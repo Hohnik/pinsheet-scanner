@@ -40,7 +40,7 @@ class Detection:
 
 def load_model(weights_path: Path):  # -> YOLO
     """Load a trained YOLO model from *weights_path*."""
-    from ultralytics import YOLO as _YOLO  # noqa: N811
+    from ultralytics import YOLO as _YOLO  # type: ignore[attr-defined]  # noqa: N811
 
     return _YOLO(str(weights_path))
 

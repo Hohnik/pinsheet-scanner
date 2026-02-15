@@ -49,7 +49,7 @@ def main() -> None:
             "Populate data/train/ and data/val/ with labeled images first."
         )
 
-    from ultralytics import YOLO
+    from ultralytics import YOLO  # type: ignore[attr-defined]
 
     model = YOLO(args.model)
     model.train(

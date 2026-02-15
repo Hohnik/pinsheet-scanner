@@ -28,6 +28,8 @@ from .model import PinClassifier
 
 __all__ = [
     "load_classifier",
+    "preprocess_crop",
+    "resolve_device",
     "classify_pins",
     "classify_pins_batch",
     "classify_pins_with_confidence",
@@ -35,7 +37,7 @@ __all__ = [
 ]
 
 
-def _resolve_device(device: torch.device | str | None) -> torch.device:
+def resolve_device(device: torch.device | str | None) -> torch.device:
     """Pick the best available device when *device* is ``None``."""
     if device is not None:
         return torch.device(device)
@@ -66,7 +68,7 @@ def load_classifier(
             "Train a model first (see scripts/train_classifier.py) or pass --classifier-model."
         )
 
-    resolved = _resolve_device(device)
+    resolved = resolve_device(device)
     model = PinClassifier()
     state = torch.load(weights_path, map_location=resolved, weights_only=True)
     model.load_state_dict(state)
@@ -75,10 +77,21 @@ def load_classifier(
     return model, resolved
 
 
-def _preprocess(crop: np.ndarray, size: tuple[int, int]) -> np.ndarray:
+def preprocess_crop(
+    crop: np.ndarray,
+    size: tuple[int, int] = CLASSIFIER_INPUT_SIZE,
+) -> np.ndarray:
     """Convert a raw crop to a normalised float32 array ready for the CNN.
 
     Steps: grayscale → resize → Otsu binarise → [0, 1] float32.
+
+    Args:
+        crop: Grayscale or BGR image.
+        size: Target ``(width, height)``.  Defaults to
+            :data:`~pinsheet_scanner.constants.CLASSIFIER_INPUT_SIZE`.
+
+    Returns:
+        Float32 array in [0, 1] with shape ``(height, width)``.
     """
     gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
     w, h = size
@@ -122,7 +135,7 @@ def classify_pins_batch_with_confidence(
     if device is None:
         device = next(model.parameters()).device
 
-    arrays = [_preprocess(c, CLASSIFIER_INPUT_SIZE) for c in crops]
+    arrays = [preprocess_crop(c) for c in crops]
     batch = torch.from_numpy(np.stack(arrays)).unsqueeze(1).to(device)
     probs = torch.sigmoid(model(batch))  # (B, 9)
 

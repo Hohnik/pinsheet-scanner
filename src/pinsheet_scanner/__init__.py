@@ -4,6 +4,8 @@ from pinsheet_scanner.classify import (
     classify_pins_batch_with_confidence,
     classify_pins_with_confidence,
     load_classifier,
+    preprocess_crop,
+    resolve_device,
 )
 from pinsheet_scanner.detect import (
     Detection,
@@ -25,7 +27,9 @@ __all__ = [
     "load_classifier",
     "load_model",
     "main",
+    "preprocess_crop",
     "process_sheet",
+    "resolve_device",
     "sort_detections",
 ]
 
