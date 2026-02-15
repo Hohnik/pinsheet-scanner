@@ -1,6 +1,10 @@
+import numpy as np
+
 from pinsheet_scanner.detect import (
     Detection,
     _cluster_by_x,
+    crop_detections,
+    draw_detections,
     sort_detections,
 )
 
@@ -95,7 +99,6 @@ class TestSortDetections:
         assert len(ordered) == 3
         ys = [d.y_center for d in ordered]
         assert ys == sorted(ys)
-        # All should be in column 0
         for d in ordered:
             assert d.column == 0
 
@@ -108,12 +111,10 @@ class TestSortDetections:
         ]
         ordered = sort_detections(detections)
         assert len(ordered) == 4
-        # First two should be column 0 (x=100), last two column 1 (x=400)
         assert ordered[0].column == 0
         assert ordered[1].column == 0
         assert ordered[2].column == 1
         assert ordered[3].column == 1
-        # Within each column, sorted top to bottom
         assert ordered[0].y_center < ordered[1].y_center
         assert ordered[2].y_center < ordered[3].y_center
 
@@ -143,11 +144,9 @@ class TestSortDetections:
         ordered = sort_detections(detections)
         assert len(ordered) == 120
 
-        # Check that we get 8 distinct columns
         col_ids = set(d.column for d in ordered)
         assert len(col_ids) == 8
 
-        # Check ordering: columns should appear in order, rows within each column too
         prev_col = -1
         prev_row = -1
         for d in ordered:
@@ -157,3 +156,45 @@ class TestSortDetections:
                 prev_row = -1
             assert d.row > prev_row or prev_row == -1
             prev_row = d.row
+
+
+class TestCropDetections:
+    def test_returns_correct_number_of_crops(self):
+        img = np.full((500, 500), 128, dtype=np.uint8)
+        dets = [
+            Detection(x_center=100, y_center=100, width=50, height=50, confidence=0.9),
+            Detection(x_center=300, y_center=300, width=50, height=50, confidence=0.9),
+        ]
+        crops = crop_detections(img, dets)
+        assert len(crops) == 2
+
+    def test_crop_is_2d_array(self):
+        img = np.full((500, 500), 128, dtype=np.uint8)
+        dets = [
+            Detection(x_center=250, y_center=250, width=80, height=80, confidence=0.9)
+        ]
+        crops = crop_detections(img, dets)
+        assert crops[0].ndim == 2
+
+    def test_boundary_clamping(self):
+        """Detections near image edge should not crash."""
+        img = np.full((100, 100), 128, dtype=np.uint8)
+        dets = [Detection(x_center=5, y_center=5, width=20, height=20, confidence=0.9)]
+        crops = crop_detections(img, dets)
+        assert len(crops) == 1
+        assert crops[0].size > 0
+
+
+class TestDrawDetections:
+    def test_returns_image_of_correct_shape(self):
+        img = np.full((500, 500, 3), 128, dtype=np.uint8)
+        dets = [
+            Detection(x_center=250, y_center=250, width=80, height=80, confidence=0.9)
+        ]
+        annotated = draw_detections(img, dets)
+        assert annotated.shape == img.shape
+
+    def test_no_crash_on_empty_detections(self):
+        img = np.full((500, 500, 3), 128, dtype=np.uint8)
+        annotated = draw_detections(img, [])
+        assert annotated.shape == img.shape

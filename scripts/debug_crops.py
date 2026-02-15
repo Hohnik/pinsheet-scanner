@@ -194,10 +194,10 @@ def main() -> None:
         print(f"{name:<20} {size_str:<12} {pins_str:>10} {score:>6} [{int_str}]")
 
     print(f"\nAll crops saved to {output_dir.resolve()}")
-    print(f"  raw/       - original grayscale crops from the image")
-    print(f"  cleaned/   - after binarization + morphological cleaning")
+    print("  raw/       - original grayscale crops from the image")
+    print("  cleaned/   - after binarization + morphological cleaning")
     print(f"  resized/   - after resizing to {DEFAULT_SIZE}")
-    print(f"  overlay/   - enlarged with pin positions + intensity values")
+    print("  overlay/   - enlarged with pin positions + intensity values")
 
 
 if __name__ == "__main__":

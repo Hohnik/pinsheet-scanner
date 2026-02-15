@@ -31,29 +31,9 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-# ---------------------------------------------------------------------------
-# Canonical pin positions in a normalised [0, 1] × [0, 1] square.
-# Derived from the standard 9‑pin diamond geometry.
-# ---------------------------------------------------------------------------
-PIN_POSITIONS: list[tuple[float, float]] = [
-    (0.50, 0.10),  # pin 0  (top)
-    (0.30, 0.30),  # pin 1
-    (0.70, 0.30),  # pin 2
-    (0.10, 0.50),  # pin 3
-    (0.50, 0.50),  # pin 4  (center)
-    (0.90, 0.50),  # pin 5
-    (0.30, 0.70),  # pin 6
-    (0.70, 0.70),  # pin 7
-    (0.50, 0.90),  # pin 8  (bottom)
-]
+from .constants import DEFAULT_MASK_RADIUS, DEFAULT_SIZE, PIN_POSITIONS
 
-DEFAULT_SIZE: tuple[int, int] = (64, 64)
-DEFAULT_MASK_RADIUS: int = 5
-
-
-# ---------------------------------------------------------------------------
-# Cleaning / pre‑processing
-# ---------------------------------------------------------------------------
+__all__ = ["DEFAULT_MASK_RADIUS", "DEFAULT_SIZE", "PIN_POSITIONS"]
 
 
 def _remove_grid_lines(inverted: np.ndarray) -> np.ndarray:
@@ -68,17 +48,14 @@ def _remove_grid_lines(inverted: np.ndarray) -> np.ndarray:
     """
     h, w = inverted.shape[:2]
 
-    # --- horizontal lines ---------------------------------------------------
     horiz_len = max(w // 3, 5)
     horiz_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (horiz_len, 1))
     horiz_lines = cv2.morphologyEx(inverted, cv2.MORPH_OPEN, horiz_kernel)
 
-    # --- vertical lines -----------------------------------------------------
     vert_len = max(h // 3, 5)
     vert_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, vert_len))
     vert_lines = cv2.morphologyEx(inverted, cv2.MORPH_OPEN, vert_kernel)
 
-    # Combine line masks and subtract from image (saturating at 0)
     lines = cv2.add(horiz_lines, vert_lines)
     cleaned = cv2.subtract(inverted, lines)
     return cleaned
@@ -114,40 +91,29 @@ def clean_diagram(diagram: np.ndarray) -> np.ndarray:
     if diagram.size == 0:
         return diagram
 
-    # Ensure single channel
     if diagram.ndim == 3:
         gray = cv2.cvtColor(diagram, cv2.COLOR_BGR2GRAY)
     else:
         gray = diagram.copy()
 
-    # Invert: dark ink → bright signal
     inverted = cv2.bitwise_not(gray)
 
-    # Strip border generously — grid lines from the table sit at the very
-    # edges of each YOLO crop.  15 % on each side is enough to kill them
-    # without eating into the pin diamond.
     inverted = _strip_border(inverted, fraction=0.15)
 
-    # Normalise to full dynamic range so that the threshold is independent
-    # of overall scan brightness / contrast.
-    lo, hi = float(inverted.min()), float(inverted.max())
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(4, 4))
+    enhanced = clahe.apply(inverted)
+
+    lo, hi = float(enhanced.min()), float(enhanced.max())
     if hi - lo > 1:
-        normalised = ((inverted.astype(np.float32) - lo) / (hi - lo) * 255).astype(
+        normalised = ((enhanced.astype(np.float32) - lo) / (hi - lo) * 255).astype(
             np.uint8
         )
     else:
-        normalised = inverted
+        normalised = enhanced
 
-    # Gentle blur to merge the outline of ring‑shaped dots with their
-    # (empty) interior and to smooth noise.
     blurred = cv2.GaussianBlur(normalised, (5, 5), sigmaX=1.5)
 
     return blurred
-
-
-# ---------------------------------------------------------------------------
-# Resize
-# ---------------------------------------------------------------------------
 
 
 def resize_diagram(
@@ -156,11 +122,6 @@ def resize_diagram(
 ) -> np.ndarray:
     """Resize a pin diagram to a fixed square dimension using area interpolation."""
     return cv2.resize(diagram, size, interpolation=cv2.INTER_AREA)
-
-
-# ---------------------------------------------------------------------------
-# Pin masks
-# ---------------------------------------------------------------------------
 
 
 def build_pin_masks(
@@ -185,11 +146,6 @@ def build_pin_masks(
     return masks
 
 
-# ---------------------------------------------------------------------------
-# Intensity measurement
-# ---------------------------------------------------------------------------
-
-
 def measure_pin_intensity(
     diagram: np.ndarray,
     masks: list[np.ndarray],
@@ -209,11 +165,6 @@ def measure_pin_intensity(
         mean_val = float(roi.sum()) / (pixel_count * 255.0)
         intensities.append(mean_val)
     return intensities
-
-
-# ---------------------------------------------------------------------------
-# Classification
-# ---------------------------------------------------------------------------
 
 
 def classify_pins(
@@ -242,7 +193,7 @@ def classify_pins_adaptive(
     to scanning conditions.
     """
     n = len(intensities)
-    result = [-1] * n  # -1 = undecided
+    result = [-1] * n
 
     for i, v in enumerate(intensities):
         if v >= high:
@@ -250,7 +201,6 @@ def classify_pins_adaptive(
         elif v < low:
             result[i] = 0
 
-    # Resolve ambiguous ones relative to median
     if -1 in result:
         med = float(np.median(intensities))
         for i in range(n):
@@ -260,24 +210,37 @@ def classify_pins_adaptive(
     return result
 
 
-# ---------------------------------------------------------------------------
-# End‑to‑end convenience
-# ---------------------------------------------------------------------------
-
-
 def pins_from_diagram(
     diagram: np.ndarray,
     size: tuple[int, int] = DEFAULT_SIZE,
     radius: int = DEFAULT_MASK_RADIUS,
     threshold: float = 0.35,
     adaptive: bool = True,
+    method: str = "intensity",
 ) -> list[int]:
     """Raw crop → list of 9 pin states.
 
-    When *adaptive* is True (the default), uses :func:`classify_pins_adaptive`
-    which is more resilient to varying scan brightness.  Otherwise falls back
-    to a simple fixed threshold.
+    Args:
+        diagram: Input diagram image
+        size: Target size for processing
+        radius: Mask radius for intensity method
+        threshold: Classification threshold for intensity method
+        adaptive: Use adaptive classification for intensity method
+        method: Classification method - "intensity" (default) or "template"
+
+    When method="intensity":
+        When *adaptive* is True (the default), uses :func:`classify_pins_adaptive`
+        which is more resilient to varying scan brightness.  Otherwise falls back
+        to a simple fixed threshold.
+
+    When method="template":
+        Uses template matching against reference filled/ring dot patterns.
     """
+    if method == "template":
+        from .classify_template import classify_pins_template
+
+        return classify_pins_template(diagram, size)
+
     cleaned = clean_diagram(diagram)
     resized = resize_diagram(cleaned, size)
     masks = build_pin_masks(size, radius)
@@ -288,16 +251,38 @@ def pins_from_diagram(
     return classify_pins(intensities, threshold)
 
 
-# ---------------------------------------------------------------------------
-# Validation helpers
-# ---------------------------------------------------------------------------
+def pins_and_intensities_from_diagram(
+    diagram: np.ndarray,
+    size: tuple[int, int] = DEFAULT_SIZE,
+    radius: int = DEFAULT_MASK_RADIUS,
+    threshold: float = 0.35,
+    adaptive: bool = True,
+) -> tuple[list[int], list[float]]:
+    """Raw crop → (pins, intensities) tuple.
 
+    Returns both the classified pin states and the intensity values used
+    for classification. Useful for calculating classification confidence.
 
-def count_pins_down(pins: list[int]) -> int:
-    """Return how many pins are knocked down."""
-    return sum(pins)
+    Args:
+        diagram: Raw cropped pin diagram image
+        size: Target size for normalization
+        radius: Mask radius for intensity measurement
+        threshold: Fixed threshold (used when adaptive=False)
+        adaptive: Use adaptive classification (default: True)
 
+    Returns:
+        Tuple of (pins, intensities) where:
+        - pins: list of 9 binary values (1=down, 0=standing)
+        - intensities: list of 9 float values [0.0, 1.0]
+    """
+    cleaned = clean_diagram(diagram)
+    resized = resize_diagram(cleaned, size)
+    masks = build_pin_masks(size, radius)
+    intensities = measure_pin_intensity(resized, masks)
 
-def validate_against_score(pins_down: list[int], expected_score: int) -> bool:
-    """Check whether detected pin count matches the printed score."""
-    return count_pins_down(pins_down) == expected_score
+    if adaptive:
+        pins = classify_pins_adaptive(intensities)
+    else:
+        pins = classify_pins(intensities, threshold)
+
+    return pins, intensities
