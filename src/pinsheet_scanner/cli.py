@@ -70,8 +70,8 @@ def scan(
     for t in result.throws:
         pins = "".join(str(p) for p in t.pins_down)
         print(
-            f"  Col {t.column:>2} | Row {t.row:>2} | Score {t.score:>1} "
-            f"| Pins {pins} | Det {t.confidence:.2f} | Cls {t.classification_confidence:.2f}"
+            f"C{t.column:>2} | R{t.row:>2} | {pins} => {t.score:>1} "
+            f"| YOLO {t.confidence:.2f} | CNN {t.classification_confidence:.2f}"
         )
     print(f"\nTotal pins knocked down: {result.total_pins}")
 
