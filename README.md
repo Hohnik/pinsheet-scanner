@@ -35,10 +35,12 @@ Copy the best weights to `models/pin_diagram.pt`.
 
 ### 2. Train the CNN classifier
 
+Place new scanned score sheets in the `sheets/` folder (or anywhere accessible), then extract crops:
+
 ```bash
 # Extract crops from a score sheet
-just debug-crops sheet.jpg
-# or: pinsheet-scanner debug-crops sheet.jpg
+just debug-crops sheets/new_sheet.jpg
+# or: pinsheet-scanner debug-crops sheets/new_sheet.jpg
 
 # Label the crops in the browser UI (1-9 keys to toggle pins, Enter to save)
 just label
