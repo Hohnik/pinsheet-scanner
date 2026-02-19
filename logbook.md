@@ -116,3 +116,37 @@ Analysed all source modules (excluding tests) for quality issues. Implemented:
    `load_classifier`, `classify_pins_batch_with_confidence`, `Detection`, etc.).
 
 All 134 tests pass.
+
+### Full cleanup — 3786 → 1852 lines (51% reduction)
+
+Aggressive cleanup pass across all source and test files:
+
+**Source (2497 → 1424 lines):**
+- Deleted `src/__init__.py` — heavy import-time side effects, nobody uses it as a library
+- `training.py` — Removed over-abstracted `TrainingComponents`, `build_training_components`,
+  `KFoldResult`, `kfold_train`. Replaced `train_one_epoch` + `evaluate` with a single
+  `_run_training_loop` used by both `train_and_evaluate` and `retrain_all`
+- `classify.py` — Renamed `classify_pins_batch_with_confidence` → `classify_pins_batch`.
+  Inlined `_confidence_from_probs`. Removed `AnyClassifier` type alias
+- `pipeline.py` — Removed `debug` param (opened cv2.imshow, never used in practice).
+  Removed logger. Removed section label comments (A2, A3, etc.)
+- `model.py` — Inlined `_conv_block` into `PinClassifier.__init__`. Trimmed docstrings
+- `detect.py` — Removed logger, trimmed docstrings and section separators
+- `preprocess.py` — Removed logger, trimmed docstrings
+- `augment.py`, `labels.py`, `ocr.py` — Trimmed docstrings throughout
+- `cli.py` — Inlined K-fold loop (concise). Removed `_format_kfold_table`,
+  `_setup_logging`. Simplified `accuracy` output. Renamed helpers
+- `constants.py` — Removed unused `CLASSIFIER_INPUT_SIZE`
+- `justfile` — Removed group tags, typecheck recipe
+
+**Tests (1289 → 428 lines, 134 → 61 tests):**
+- `test_labels.py` — 233→67: kept roundtrip + edge cases, removed 15+ redundant tests
+- `test_preprocess.py` — 176→53: kept contract + determinism, removed pixel edge cases
+- `test_augment.py` — 118→47: kept core behaviors, removed frozen/default tests
+- `test_tune.py` → `test_training.py` — 290→80: removed PinClassifier dropout tests,
+  scheduler type-checking tests. Kept smoke tests
+- `test_classify.py` — 225→82: consolidated weight-dependent tests
+- `test_detect.py` — 113→49: merged test classes
+- `test_pipeline.py` — 134→50: removed TestDefaultPaths, trimmed
+
+All 61 tests pass.

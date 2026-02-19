@@ -1,38 +1,16 @@
-"""Full processing pipeline: preprocess → detect → classify → OCR-validate.
-
-Detection strategy
-------------------
-Classical blob analysis (A3) is attempted first.  If it finds fewer than
-``min_classical`` diagrams, the YOLO model is used as fallback (loaded only
-when its weights file exists).
-
-New fields on ``ThrowResult``
-------------------------------
-* ``ocr_mismatch`` — ``True`` when the OCR-read score adjacent to the
-  diagram disagrees with ``sum(pins_down)`` (requires pytesseract).
-"""
+"""Full pipeline: preprocess → detect → classify → OCR-validate."""
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import cv2
 
-from classify import classify_pins_batch_with_confidence, load_classifier
-from detect import (
-    YOLOModel,
-    crop_detections,
-    detect_pin_diagrams,
-    draw_detections,
-    load_model,
-    sort_detections,
-)
+from classify import classify_pins_batch, load_classifier
+from detect import YOLOModel, crop_detections, detect_pin_diagrams, load_model, sort_detections
 from ocr import cross_validate
 from preprocess import rectify_sheet
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -70,62 +48,37 @@ def process_sheet(
     model_path: Path | None = None,
     classifier_path: Path | None = None,
     confidence: float = 0.25,
-    debug: bool = False,
 ) -> SheetResult:
-    """Full pipeline: load → preprocess → detect → classify → OCR-validate.
-
-    Args:
-        image_path: Path to the scanned score sheet image.
-        model_path: Optional YOLO weights for fallback detection.
-        classifier_path: CNN classifier weights.
-        confidence: YOLO fallback confidence threshold.
-        debug: Show an annotated image window.
-
-    Returns:
-        :class:`SheetResult` with all throws in reading order.
-    """
+    """Full pipeline: load → preprocess → detect → classify → OCR-validate."""
     classifier_path = classifier_path or DEFAULT_CLASSIFIER_PATH
 
     raw = cv2.imread(str(image_path))
     if raw is None:
         raise FileNotFoundError(f"Could not load image: {image_path}")
 
-    # ── A2: perspective correction + CLAHE ────────────────────────────────
-    rectified = rectify_sheet(raw)  # always grayscale after this
+    rectified = rectify_sheet(raw)
 
-    # ── A3: classical detection, YOLO fallback ────────────────────────────
     yolo: YOLOModel | None = None
     detector_path = model_path or DEFAULT_DETECTOR_PATH
     if detector_path.exists():
         yolo = load_model(detector_path)
 
     sorted_dets = sort_detections(detect_pin_diagrams(yolo, rectified, confidence))
-
-    if debug:
-        vis = cv2.cvtColor(rectified, cv2.COLOR_GRAY2BGR)
-        cv2.imshow("Detections", draw_detections(vis, sorted_dets))
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
-
     crops = crop_detections(rectified, sorted_dets)
 
     if not crops:
-        logger.warning("No pin diagrams detected in %s", image_path)
-        return SheetResult(columns=0, rows_per_column=0)
+        return SheetResult()
 
-    # ── A1 + C4: spatial ROI classifier with TTA ──────────────────────────
     if not classifier_path.exists():
         raise FileNotFoundError(
             f"Classifier weights not found at {classifier_path}. "
             "Train a model first (see `pinsheet-scanner train`)."
         )
     cnn, device = load_classifier(classifier_path)
-    classifications = classify_pins_batch_with_confidence(cnn, crops, device=device)
+    classifications = classify_pins_batch(cnn, crops, device=device)
 
-    # ── D1: OCR cross-validation ──────────────────────────────────────────
     flagged = set(cross_validate(rectified, sorted_dets, classifications))
 
-    # ── Assemble ──────────────────────────────────────────────────────────
     col_indices = {d.column for d in sorted_dets}
     result = SheetResult(
         columns=len(col_indices),
@@ -136,16 +89,9 @@ def process_sheet(
     )
 
     for i, (det, (pins, cls_conf)) in enumerate(zip(sorted_dets, classifications)):
-        result.throws.append(
-            ThrowResult(
-                column=det.column,
-                row=det.row,
-                score=sum(pins),
-                pins_down=pins,
-                confidence=det.confidence,
-                classification_confidence=cls_conf,
-                ocr_mismatch=i in flagged,
-            )
-        )
-
+        result.throws.append(ThrowResult(
+            column=det.column, row=det.row, score=sum(pins),
+            pins_down=pins, confidence=det.confidence,
+            classification_confidence=cls_conf, ocr_mismatch=i in flagged,
+        ))
     return result

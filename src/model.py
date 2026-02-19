@@ -1,14 +1,11 @@
 """CNN models for classifying 9-pin states from cropped pin diagrams.
 
-Two architectures are provided:
+* ``PinClassifier`` — legacy global-average-pool model.
+* ``SpatialPinClassifier`` — spatially-grounded model that extracts a
+  fixed patch at each known pin position.  Preferred for new training.
 
-* ``PinClassifier`` — legacy global-average-pool model (backward compatible).
-* ``SpatialPinClassifier`` — spatially-grounded model that extracts a fixed
-  patch at each known pin position and classifies each independently.
-  Preferred for new training runs.
-
-Input for both: 1 × 64 × 64 grayscale image with pixel values in [0, 1].
-Output for both: 9 raw logits — apply sigmoid for per-pin probabilities.
+Input: 1 × 64 × 64 grayscale, pixel values in [0, 1].
+Output: 9 raw logits (apply sigmoid for per-pin probabilities).
 """
 
 from __future__ import annotations
@@ -20,100 +17,55 @@ import torch.nn.functional as F
 from constants import NUM_PINS, PATCH_SIZE, PIN_COORDS_64
 
 
-def _conv_block(in_ch: int, out_ch: int) -> list[nn.Module]:
-    return [
-        nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1),
-        nn.BatchNorm2d(out_ch),
-        nn.ReLU(inplace=True),
-        nn.MaxPool2d(2),
-    ]
-
-
 class PinClassifier(nn.Module):
-    """Legacy global-pooling CNN — kept for backward compatibility.
-
-    Args:
-        dropout: Drop probability before the final linear layer.
-    """
+    """Legacy global-pooling CNN — kept for backward compatibility."""
 
     def __init__(self, dropout: float = 0.3) -> None:
         super().__init__()
-        self.features = nn.Sequential(
-            *_conv_block(1, 32),    # 1×64×64  → 32×32×32
-            *_conv_block(32, 64),   #           → 64×16×16
-            *_conv_block(64, 128),  #           → 128×8×8
-            *_conv_block(128, 128), #           → 128×4×4
-        )
+        blocks: list[nn.Module] = []
+        for in_ch, out_ch in [(1, 32), (32, 64), (64, 128), (128, 128)]:
+            blocks += [
+                nn.Conv2d(in_ch, out_ch, 3, padding=1),
+                nn.BatchNorm2d(out_ch),
+                nn.ReLU(inplace=True),
+                nn.MaxPool2d(2),
+            ]
+        self.features = nn.Sequential(*blocks)
         self.pool = nn.AdaptiveAvgPool2d(1)
-        self.head = nn.Sequential(
-            nn.Dropout(dropout),
-            nn.Linear(128, NUM_PINS),
-        )
+        self.head = nn.Sequential(nn.Dropout(dropout), nn.Linear(128, NUM_PINS))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.features(x)
-        x = self.pool(x)
-        x = x.view(x.size(0), -1)
-        return self.head(x)
+        return self.head(self.pool(self.features(x)).flatten(1))
 
 
 class SpatialPinClassifier(nn.Module):
-    """Spatial ROI pin classifier using fixed per-pin patch queries.
-
-    For each of the 9 known pin positions in the 64×64 crop, a small
-    ``PATCH_SIZE × PATCH_SIZE`` patch is extracted and passed through a
-    shared convolutional encoder.  A shared head then maps each encoded
-    patch to a single logit.
-
-    Advantages over global-pooling:
-    * 9× more training signal per labelled crop.
-    * Spatially grounded — looks at exactly the right location per pin.
-    * Per-pin task is trivially simple: filled dot vs. empty ring.
-
-    Args:
-        dropout: Drop probability before the per-pin output head.
-    """
+    """Extracts a patch at each of the 9 pin positions and classifies each."""
 
     def __init__(self, dropout: float = 0.3) -> None:
         super().__init__()
-        half = PATCH_SIZE // 2  # 6
-
-        # Shared encoder: (1, P, P) → 32-dim feature vector.
+        half = PATCH_SIZE // 2
         self.encoder = nn.Sequential(
-            nn.Conv2d(1, 16, 3, padding=1),   # 16 × P  × P
+            nn.Conv2d(1, 16, 3, padding=1),
             nn.BatchNorm2d(16),
             nn.ReLU(inplace=True),
-            nn.MaxPool2d(2),                   # 16 × P/2 × P/2
+            nn.MaxPool2d(2),
             nn.Flatten(),
             nn.Linear(16 * half * half, 32),
             nn.ReLU(inplace=True),
         )
-
-        # Shared per-pin head: one scalar logit per pin.
-        self.head = nn.Sequential(
-            nn.Dropout(dropout),
-            nn.Linear(32, 1),
-        )
+        self.head = nn.Sequential(nn.Dropout(dropout), nn.Linear(32, 1))
 
     def _extract_patches(self, x: torch.Tensor) -> torch.Tensor:
-        """Extract one patch per pin, return (B * NUM_PINS, 1, P, P)."""
-        B = x.size(0)
-        h = PATCH_SIZE // 2
-        patches: list[torch.Tensor] = []
+        B, h = x.size(0), PATCH_SIZE // 2
+        patches = []
         for cx, cy in PIN_COORDS_64:
-            patch = x[:, :, cy - h : cy + h, cx - h : cx + h]
-            ph = PATCH_SIZE - patch.shape[2]
-            pw = PATCH_SIZE - patch.shape[3]
+            p = x[:, :, cy - h : cy + h, cx - h : cx + h]
+            ph, pw = PATCH_SIZE - p.shape[2], PATCH_SIZE - p.shape[3]
             if ph > 0 or pw > 0:
-                patch = F.pad(patch, (0, pw, 0, ph))
-            patches.append(patch)
-        # (B, 9, 1, P, P) → (B*9, 1, P, P)
+                p = F.pad(p, (0, pw, 0, ph))
+            patches.append(p)
         return torch.stack(patches, dim=1).view(B * NUM_PINS, 1, PATCH_SIZE, PATCH_SIZE)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Return raw logits of shape ``(B, 9)``."""
         B = x.size(0)
-        patches = self._extract_patches(x)      # (B*9, 1, P, P)
-        features = self.encoder(patches)         # (B*9, 32)
-        logits = self.head(features)             # (B*9, 1)
-        return logits.view(B, NUM_PINS)          # (B, 9)
+        return self.head(self.encoder(self._extract_patches(x))).view(B, NUM_PINS)

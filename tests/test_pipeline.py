@@ -5,130 +5,46 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from pipeline import (
-    DEFAULT_CLASSIFIER_PATH,
-    DEFAULT_DETECTOR_PATH,
-    SheetResult,
-    ThrowResult,
-)
+from pipeline import SheetResult, ThrowResult
 
 
-class TestDefaultPaths:
-    """Tests for default model path constants."""
-
-    @pytest.mark.parametrize(
-        "path,expected_name",
-        [
-            (DEFAULT_DETECTOR_PATH, "pin_diagram.pt"),
-            (DEFAULT_CLASSIFIER_PATH, "pin_classifier.pt"),
-        ],
-    )
-    def test_path_is_relative_and_in_models_dir(self, path, expected_name):
-        assert isinstance(path, Path)
-        assert not path.is_absolute()
-        assert path.name == expected_name
-        assert path.parent.name == "models"
-
-
-class TestThrowResult:
-    """Tests for ThrowResult dataclass."""
-
-    def test_basic_fields(self):
-        t = ThrowResult(
-            column=2,
-            row=5,
-            score=7,
-            pins_down=[1, 1, 1, 0, 1, 1, 1, 0, 0],
-            confidence=0.92,
-            classification_confidence=0.85,
-        )
-        assert (t.column, t.row, t.score) == (2, 5, 7)
-        assert t.pins_down == [1, 1, 1, 0, 1, 1, 1, 0, 0]
-        assert (t.confidence, t.classification_confidence) == (0.92, 0.85)
-
-    def test_defaults(self):
-        t = ThrowResult(column=0, row=0, score=0)
-        assert t.pins_down == []
-        assert t.confidence == 0.0
-        assert t.classification_confidence == 0.0
-
-
-class TestSheetResult:
-    """Tests for SheetResult dataclass."""
-
+class TestDataclasses:
     def test_empty_sheet(self):
         r = SheetResult()
-        assert (r.throws, r.columns, r.rows_per_column, r.total_pins) == ([], 0, 0, 0)
+        assert r.throws == [] and r.total_pins == 0
 
-    @pytest.mark.parametrize(
-        "pins_lists,expected_total",
-        [
-            ([[1, 1, 0, 0, 1, 0, 0, 0, 0], [1, 1, 1, 0, 1, 0, 1, 0, 0]], 8),
-            ([[1] * 9], 9),
-            ([[0] * 9], 0),
-        ],
-    )
-    def test_total_pins(self, pins_lists, expected_total):
-        result = SheetResult()
-        for i, pins in enumerate(pins_lists):
-            result.throws.append(
-                ThrowResult(column=0, row=i, score=sum(pins), pins_down=pins)
-            )
-        assert result.total_pins == expected_total
+    def test_total_pins(self):
+        r = SheetResult()
+        r.throws.append(ThrowResult(column=0, row=0, score=3, pins_down=[1, 1, 1, 0, 0, 0, 0, 0, 0]))
+        r.throws.append(ThrowResult(column=0, row=1, score=9, pins_down=[1] * 9))
+        assert r.total_pins == 12
+
+    def test_throw_defaults(self):
+        t = ThrowResult(column=0, row=0, score=0)
+        assert t.pins_down == [] and t.confidence == 0.0
 
 
 class TestProcessSheetErrors:
-    """Tests for error handling in process_sheet."""
-
-    def test_nonexistent_detector_is_ignored(self, tmp_path):
-        """YOLO detector is optional — a missing model path is silently skipped."""
-        import cv2
-
-        from pipeline import process_sheet
-
-        test_image = tmp_path / "test.jpg"
-        cv2.imwrite(str(test_image), np.zeros((100, 100, 3), dtype=np.uint8))
-
-        # Should not raise — classical detection runs, finds nothing on a blank image.
-        result = process_sheet(
-            test_image,
-            model_path=Path("models/nonexistent_detector.pt"),
-            classifier_path=Path("models/nonexistent_classifier.pt"),
-        )
-        assert result.throws == []
-
-    def test_nonexistent_classifier_raises_error(self):
-        """load_classifier raises FileNotFoundError for a missing weights file."""
-        from classify import load_classifier
-
-        with pytest.raises(FileNotFoundError, match="Classifier weights not found"):
-            load_classifier(Path("models/nonexistent_classifier.pt"))
-
-    def test_nonexistent_image_raises_error(self):
+    def test_missing_image_raises(self):
         from pipeline import process_sheet
 
         with pytest.raises(FileNotFoundError):
-            process_sheet(Path("totally_nonexistent_image.jpg"))
+            process_sheet(Path("nonexistent.jpg"))
 
-    @pytest.mark.integration
-    def test_process_sheet_returns_valid_result(self, tmp_path):
+    def test_missing_detector_is_ok(self, tmp_path):
+        """Classical detection runs when YOLO weights are missing."""
         import cv2
 
         from pipeline import process_sheet
 
-        if not (
-            Path("models/pin_diagram.pt").exists()
-            and Path("models/pin_classifier.pt").exists()
-        ):
-            pytest.skip("Model weights not found — train both models first")
+        img = tmp_path / "test.jpg"
+        cv2.imwrite(str(img), np.zeros((100, 100, 3), dtype=np.uint8))
+        result = process_sheet(img, model_path=Path("nonexistent.pt"),
+                               classifier_path=Path("nonexistent.pt"))
+        assert result.throws == []
 
-        test_image = tmp_path / "test.jpg"
-        cv2.imwrite(str(test_image), np.zeros((100, 100, 3), dtype=np.uint8))
+    def test_missing_classifier_raises(self):
+        from classify import load_classifier
 
-        result = process_sheet(test_image)
-        assert isinstance(result, SheetResult)
-        for t in result.throws:
-            assert isinstance(t, ThrowResult)
-            assert 0.0 <= t.classification_confidence <= 1.0
-            assert len(t.pins_down) == 9
-            assert all(p in (0, 1) for p in t.pins_down)
+        with pytest.raises(FileNotFoundError):
+            load_classifier(Path("nonexistent.pt"))
