@@ -1,11 +1,15 @@
-"""CNN models for classifying 9-pin states from cropped pin diagrams.
+"""Pin classifier: shared-backbone CNN with spatial pin extraction.
 
-* ``PinClassifier`` — legacy global-average-pool model.
-* ``SpatialPinClassifier`` — spatially-grounded model that extracts a
-  fixed patch at each known pin position.  Preferred for new training.
+Input: B×1×64×64 grayscale, pixel values in [0, 1].
+Output: B×9 raw logits (apply sigmoid for per-pin probabilities).
 
-Input: 1 × 64 × 64 grayscale, pixel values in [0, 1].
-Output: 9 raw logits (apply sigmoid for per-pin probabilities).
+Pin layout (diamond pattern, front pin = 0)::
+
+        8
+      6   7
+    3   4   5
+      1   2
+        0
 """
 
 from __future__ import annotations
@@ -14,58 +18,40 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from constants import NUM_PINS, PATCH_SIZE, PIN_COORDS_64
+NUM_PINS: int = 9
+PATCH_SIZE: int = 12
+
+PIN_COORDS: list[tuple[int, int]] = [
+    (32, 56),                          # 0 – front
+    (20, 44), (44, 44),                # 1, 2
+    (8,  32), (32, 32), (56, 32),      # 3, 4, 5
+    (20, 20), (44, 20),                # 6, 7
+    (32,  8),                          # 8 – back
+]
+"""(cx, cy) of each pin centre in the 64×64 canonical crop."""
 
 
 class PinClassifier(nn.Module):
-    """Legacy global-pooling CNN — kept for backward compatibility."""
+    """Shared-backbone CNN that extracts features at 9 known pin positions.
+
+    Runs two conv layers on the full image to build a feature map, then
+    extracts a small patch around each pin position and average-pools it
+    to a single feature vector.  A shared linear head classifies each pin.
+    """
 
     def __init__(self, dropout: float = 0.3) -> None:
         super().__init__()
-        blocks: list[nn.Module] = []
-        for in_ch, out_ch in [(1, 32), (32, 64), (64, 128), (128, 128)]:
-            blocks += [
-                nn.Conv2d(in_ch, out_ch, 3, padding=1),
-                nn.BatchNorm2d(out_ch),
-                nn.ReLU(inplace=True),
-                nn.MaxPool2d(2),
-            ]
-        self.features = nn.Sequential(*blocks)
-        self.pool = nn.AdaptiveAvgPool2d(1)
-        self.head = nn.Sequential(nn.Dropout(dropout), nn.Linear(128, NUM_PINS))
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.head(self.pool(self.features(x)).flatten(1))
-
-
-class SpatialPinClassifier(nn.Module):
-    """Extracts a patch at each of the 9 pin positions and classifies each."""
-
-    def __init__(self, dropout: float = 0.3) -> None:
-        super().__init__()
-        half = PATCH_SIZE // 2
-        self.encoder = nn.Sequential(
-            nn.Conv2d(1, 16, 3, padding=1),
-            nn.BatchNorm2d(16),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(2),
-            nn.Flatten(),
-            nn.Linear(16 * half * half, 32),
-            nn.ReLU(inplace=True),
+        self.backbone = nn.Sequential(
+            nn.Conv2d(1, 32, 3, padding=1), nn.BatchNorm2d(32), nn.ReLU(inplace=True),
+            nn.Conv2d(32, 32, 3, padding=1), nn.BatchNorm2d(32), nn.ReLU(inplace=True),
         )
         self.head = nn.Sequential(nn.Dropout(dropout), nn.Linear(32, 1))
 
-    def _extract_patches(self, x: torch.Tensor) -> torch.Tensor:
-        B, h = x.size(0), PATCH_SIZE // 2
-        patches = []
-        for cx, cy in PIN_COORDS_64:
-            p = x[:, :, cy - h : cy + h, cx - h : cx + h]
-            ph, pw = PATCH_SIZE - p.shape[2], PATCH_SIZE - p.shape[3]
-            if ph > 0 or pw > 0:
-                p = F.pad(p, (0, pw, 0, ph))
-            patches.append(p)
-        return torch.stack(patches, dim=1).view(B * NUM_PINS, 1, PATCH_SIZE, PATCH_SIZE)
-
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        B = x.size(0)
-        return self.head(self.encoder(self._extract_patches(x))).view(B, NUM_PINS)
+        feat = self.backbone(x)  # B×32×64×64
+        h = PATCH_SIZE // 2
+        patches = torch.stack([
+            F.adaptive_avg_pool2d(feat[:, :, cy - h:cy + h, cx - h:cx + h], 1).flatten(1)
+            for cx, cy in PIN_COORDS
+        ], dim=1)  # B×9×32
+        return self.head(patches).squeeze(-1)  # B×9

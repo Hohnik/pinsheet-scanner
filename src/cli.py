@@ -17,12 +17,17 @@ app = typer.Typer(
 
 CropsOpt = Annotated[Path, typer.Option(help="Directory containing crop PNGs.")]
 LabelsOpt = Annotated[Path, typer.Option(help="Ground-truth labels CSV.")]
-_SEED = 42
+SEED = 42
 
 
 def _require(path: Path, label: str, hint: str = "") -> None:
     if not path.exists():
         raise typer.BadParameter(f"{label} not found at {path}." + (f" {hint}" if hint else ""))
+
+
+def _hp_keys(hp: dict) -> dict:
+    """Extract only the training-relevant keys from a hyperparams dict."""
+    return {k: hp[k] for k in ("lr", "weight_decay", "dropout", "batch_size")}
 
 
 # ── Inference ─────────────────────────────────────────────────────────────
@@ -60,20 +65,16 @@ def train(
 ) -> None:
     """K-fold cross-validate then retrain the CNN classifier."""
     import numpy as np
-    from sklearn.model_selection import KFold
+    import torch
 
     from classify import resolve_device
     from labels import load_labels_as_list
-    from training import HYPERPARAMS_PATH, load_defaults, log_experiment, retrain_all, train_and_evaluate
+    from training import HYPERPARAMS_PATH, load_hyperparams, train_new_model
 
     _require(labels, "Labels", "Run `pinsheet-scanner label` first.")
     _require(crops, "Crops directory")
 
-    defaults = load_defaults()
-    hp = dict(lr=float(defaults["lr"]), weight_decay=float(defaults["weight_decay"]),
-              dropout=float(defaults["dropout"]), batch_size=int(defaults["batch_size"]),
-              scheduler_name=str(defaults["scheduler"]))
-
+    hp = _hp_keys(load_hyperparams())
     all_entries = load_labels_as_list(labels)
     if len(all_entries) < folds:
         raise typer.BadParameter(f"Only {len(all_entries)} images — need ≥ {folds}.")
@@ -83,30 +84,27 @@ def train(
         print(f"Loaded hyperparams from {HYPERPARAMS_PATH}")
     print(f"Device: {dev}  |  {len(all_entries)} images  |  {folds} folds  |  {epochs} epochs\n")
 
-    kf = KFold(n_splits=folds, shuffle=True, random_state=_SEED)
+    indices = np.random.default_rng(SEED).permutation(len(all_entries))
+    fold_splits = np.array_split(indices, folds)
     losses, accs = [], []
-    for fold, (train_idx, val_idx) in enumerate(kf.split(all_entries)):
-        train_e = [all_entries[i] for i in train_idx]
-        val_e = [all_entries[i] for i in val_idx]
+    for fold in range(folds):
+        val_idx = set(fold_splits[fold].tolist())
+        train_e = [all_entries[i] for i in range(len(all_entries)) if i not in val_idx]
+        val_e = [all_entries[i] for i in fold_splits[fold]]
         print(f"Fold {fold + 1}/{folds}  (train={len(train_e)}, val={len(val_e)}) ", end="", flush=True)
-        vl, va = train_and_evaluate(train_e, val_e, crops, epochs, dev, _SEED + fold, **hp)
+        _, vl, va = train_new_model(train_e, crops, epochs, dev, SEED + fold, val_entries=val_e, **hp)
         losses.append(vl)
         accs.append(va)
         print(f"→ loss={vl:.4f}  acc={va:.2%}")
 
     mean_acc, std_acc = float(np.mean(accs)), float(np.std(accs))
-    mean_loss = float(np.mean(losses))
-    print(f"\nMean: loss={mean_loss:.4f}  acc={mean_acc:.2%} ±{std_acc:.2%}")
+    print(f"\nMean: loss={np.mean(losses):.4f}  acc={mean_acc:.2%} ±{std_acc:.2%}")
 
     print(f"\nRetraining on all {len(all_entries)} images...")
-    extra = {"folds": folds, "epochs": epochs, **{k: v for k, v in hp.items() if k != "scheduler_name"}}
-    best_loss = retrain_all(all_entries, crops, output, dev, epochs, _SEED,
-                            val_accuracy=mean_acc, extra_bundle=extra, **hp)
-    print(f"Final loss: {best_loss:.4f}  →  {output.resolve()}")
-
-    log_experiment({"command": "train", "folds": folds, "epochs": epochs,
-                    "val_acc_mean": round(mean_acc, 6), "val_loss_mean": round(mean_loss, 6),
-                    "hyperparams": hp, "output": str(output)})
+    model, loss, _ = train_new_model(all_entries, crops, epochs, dev, SEED, **hp)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(model.state_dict(), output)
+    print(f"Final loss: {loss:.4f}  →  {output.resolve()}")
 
 
 @app.command("train-detector")
@@ -147,17 +145,16 @@ def tune(
 
     from classify import resolve_device
     from labels import load_labels_as_list
-    from training import HYPERPARAMS_PATH, log_experiment, split_entries, train_and_evaluate
+    from training import HYPERPARAMS_PATH, split_entries, train_new_model
 
     _require(labels, "Labels", "Run `pinsheet-scanner label` first.")
     _require(crops, "Crops directory")
 
     all_entries = load_labels_as_list(labels)
-    val_count = max(1, len(all_entries) // 5)
-    if len(all_entries) <= val_count:
+    if len(all_entries) < 5:
         raise typer.BadParameter(f"Only {len(all_entries)} images — need more.")
 
-    train_entries, val_entries = split_entries(all_entries, val_count, _SEED)
+    train_entries, val_entries = split_entries(all_entries, 0.2, SEED)
     dev = resolve_device(None)
     print(f"Train: {len(train_entries)}  |  Val: {len(val_entries)}  |  {trials} trials\n")
 
@@ -167,13 +164,13 @@ def tune(
             weight_decay=trial.suggest_float("weight_decay", 1e-5, 1e-3, log=True),
             dropout=trial.suggest_float("dropout", 0.1, 0.5),
             batch_size=trial.suggest_categorical("batch_size", [8, 16, 32]),
-            scheduler_name=trial.suggest_categorical("scheduler", ["plateau", "cosine", "onecycle", "step"]),
         )
-        vl, va = train_and_evaluate(train_entries, val_entries, crops, epochs, dev, _SEED, **hp)
+        _, vl, va = train_new_model(train_entries, crops, epochs, dev, SEED,
+                                    val_entries=val_entries, **hp)
         trial.set_user_attr("val_acc", va)
         return vl
 
-    study = optuna.create_study(direction="minimize", sampler=optuna.samplers.TPESampler(seed=_SEED))
+    study = optuna.create_study(direction="minimize", sampler=optuna.samplers.TPESampler(seed=SEED))
     study.optimize(objective, n_trials=trials)
 
     best = study.best_trial
@@ -181,13 +178,9 @@ def tune(
     for k, v in best.params.items():
         print(f"  {k}: {v}")
 
-    hp_dict = {k: best.params[k] for k in ("lr", "weight_decay", "dropout", "batch_size", "scheduler")}
     HYPERPARAMS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    HYPERPARAMS_PATH.write_text(json.dumps(hp_dict, indent=2) + "\n")
+    HYPERPARAMS_PATH.write_text(json.dumps(best.params, indent=2) + "\n")
     print(f"Saved to {HYPERPARAMS_PATH}")
-
-    log_experiment({"command": "tune", "trials": trials, "epochs_per_trial": epochs,
-                    "best_val_loss": round(best.value, 6), "best_hyperparams": hp_dict})
 
 
 # ── Extract & Label ───────────────────────────────────────────────────────
@@ -286,7 +279,6 @@ def label(crops: CropsOpt = Path("debug_crops/raw")) -> None:
     existing = load_labels_as_dict(labels_path)
     print(f"{len(all_names)} crops, {sum(1 for n in all_names if n in existing)} labeled")
 
-    # CNN suggestions + confidence-based sort
     predictions: dict[str, dict] = {}
     if DEFAULT_CLASSIFIER_PATH.exists():
         cnn, dev = load_classifier(DEFAULT_CLASSIFIER_PATH)
@@ -361,7 +353,6 @@ def accuracy(
     import cv2
 
     from classify import classify_pins_batch, load_classifier
-    from constants import NUM_PINS
     from labels import load_labels_as_dict
     from pipeline import DEFAULT_CLASSIFIER_PATH
 
@@ -391,7 +382,7 @@ def accuracy(
         ok = pred == gt
         correct_pins += sum(p == g for p, g in zip(pred, gt))
         correct_diags += int(ok)
-        total_pins += NUM_PINS
+        total_pins += len(gt)
         if not ok:
             mismatches.append((name, gt, pred, conf))
 

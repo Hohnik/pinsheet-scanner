@@ -1,12 +1,11 @@
 """CNN-based pin state classification with test-time augmentation (TTA).
 
-Inference runs ``TTA_PASSES`` forward passes per crop (first clean, rest
-with mild augmentation) and averages sigmoid probabilities before thresholding.
+Runs ``TTA_PASSES`` forward passes per crop (first clean, rest with mild
+augmentation) and averages sigmoid probabilities before thresholding.
 """
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import cv2
@@ -14,7 +13,7 @@ import numpy as np
 import torch
 
 from augment import AugmentConfig, augment
-from model import PinClassifier, SpatialPinClassifier
+from model import PinClassifier
 
 TTA_PASSES: int = 5
 
@@ -41,33 +40,22 @@ def resolve_device(device: torch.device | str | None) -> torch.device:
 
 
 def load_classifier(
-    weights_path: Path,
-    *,
-    device: torch.device | str | None = None,
-) -> tuple[PinClassifier | SpatialPinClassifier, torch.device]:
-    """Load a trained classifier from disk.
-
-    Reads the JSON sidecar (``<weights>.json``) to pick the architecture.
-    Falls back to ``PinClassifier`` for weights without a sidecar.
-    """
+    weights_path: Path, *, device: torch.device | str | None = None,
+) -> tuple[PinClassifier, torch.device]:
+    """Load a trained PinClassifier from disk."""
     if not weights_path.exists():
-        raise FileNotFoundError(
-            f"Classifier weights not found at {weights_path}. "
-            "Train a model first (see `pinsheet-scanner train`)."
-        )
-    resolved = resolve_device(device)
-
-    bundle_path = weights_path.with_suffix(".json")
-    arch = "PinClassifier"
-    if bundle_path.exists():
-        arch = json.loads(bundle_path.read_text()).get("architecture", arch)
-
-    model: PinClassifier | SpatialPinClassifier
-    model = SpatialPinClassifier() if arch == "SpatialPinClassifier" else PinClassifier()
-
-    model.load_state_dict(torch.load(weights_path, map_location=resolved, weights_only=True))
-    model.to(resolved).eval()
-    return model, resolved
+        raise FileNotFoundError(f"Classifier not found: {weights_path}")
+    dev = resolve_device(device)
+    model = PinClassifier()
+    try:
+        model.load_state_dict(torch.load(weights_path, map_location=dev, weights_only=True))
+    except RuntimeError as e:
+        raise RuntimeError(
+            f"Cannot load weights from {weights_path}. "
+            "Architecture may have changed — retrain with `just train`."
+        ) from e
+    model.to(dev).eval()
+    return model, dev
 
 
 def preprocess_crop(crop: np.ndarray, size: tuple[int, int] = (64, 64)) -> np.ndarray:
@@ -78,14 +66,9 @@ def preprocess_crop(crop: np.ndarray, size: tuple[int, int] = (64, 64)) -> np.nd
     return binary.astype(np.float32) / 255.0
 
 
-def _preprocess_with_tta(crop: np.ndarray, rng: np.random.Generator) -> np.ndarray:
-    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
-    return preprocess_crop(augment(gray, rng, _TTA_CFG))
-
-
 @torch.no_grad()
 def classify_pins_batch(
-    model: PinClassifier | SpatialPinClassifier,
+    model: PinClassifier,
     crops: list[np.ndarray],
     *,
     device: torch.device | None = None,
@@ -93,7 +76,7 @@ def classify_pins_batch(
 ) -> list[tuple[list[int], float]]:
     """Classify pin states for a batch of crops with TTA.
 
-    Returns list of ``(pins, confidence)`` tuples, one per crop.
+    Returns ``[(pins, confidence), …]`` per crop.
     """
     if not crops:
         return []
@@ -103,15 +86,17 @@ def classify_pins_batch(
     rng = np.random.default_rng(42)
     acc: torch.Tensor | None = None
     for i in range(TTA_PASSES):
-        arrays = [preprocess_crop(c) for c in crops] if i == 0 else [_preprocess_with_tta(c, rng) for c in crops]
+        if i == 0:
+            arrays = [preprocess_crop(c) for c in crops]
+        else:
+            grays = [cv2.cvtColor(c, cv2.COLOR_BGR2GRAY) if c.ndim == 3 else c for c in crops]
+            arrays = [preprocess_crop(augment(g, rng, _TTA_CFG)) for g in grays]
         probs = torch.sigmoid(model(torch.from_numpy(np.stack(arrays)).unsqueeze(1).to(device)))
         acc = probs if acc is None else acc + probs
 
     avg = acc / TTA_PASSES  # type: ignore[operator]
+    conf = (avg - 0.5).abs().mean(dim=1) * 2.0
     return [
-        (
-            (avg[i] >= threshold).int().cpu().tolist(),
-            float((avg[i] - 0.5).abs().mean().item() * 2.0),
-        )
+        ((avg[i] >= threshold).int().cpu().tolist(), float(conf[i]))
         for i in range(avg.size(0))
     ]

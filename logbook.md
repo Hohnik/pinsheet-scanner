@@ -150,3 +150,43 @@ Aggressive cleanup pass across all source and test files:
 - `test_pipeline.py` — 134→50: removed TestDefaultPaths, trimmed
 
 All 61 tests pass.
+
+### Architecture & training overhaul — 1852 → 1679 lines
+
+**Model (`model.py` 71→57 lines):**
+- Deleted legacy `PinClassifier` (global-avg-pool, 4 conv blocks, 18K params)
+- Renamed `SpatialPinClassifier` → `PinClassifier`
+- New architecture: shared 2-layer backbone (32 channels, no pooling) produces
+  a feature map at full 64×64 resolution. 12×12 patches extracted at each of
+  the 9 pin positions from the *feature map* (not raw pixels), average-pooled
+  to 32-dim vectors, classified by shared linear head. ~10K params.
+- Absorbed `constants.py` — `NUM_PINS`, `PATCH_SIZE`, `PIN_COORDS` now in model.py
+
+**Training (`training.py` 257→162 lines):**
+- Removed 4-scheduler system (plateau/cosine/onecycle/step) → cosine annealing only
+- Removed `make_scheduler`, `_step_scheduler`, `save_model_bundle`, `log_experiment`
+- Removed sidecar JSON and `experiments.jsonl`
+- AdamW replaces Adam (correct weight decay decoupling)
+- Best weights kept in memory, restored at end (no disk I/O during training)
+- Merged `train_and_evaluate` + `retrain_all` → single `train_new_model`
+- Renamed `RealCropDataset` → `CropDataset`
+- `split_entries` takes `val_fraction` instead of `val_count`
+
+**Classify (`classify.py` 117→102 lines):**
+- Removed legacy `PinClassifier` import and sidecar JSON detection
+- `load_classifier` gives clear error on architecture mismatch
+- Batch confidence computed in one line via `(avg - 0.5).abs().mean(dim=1) * 2`
+
+**CLI (`cli.py` 407→398 lines):**
+- K-fold inlined with numpy (removed `scikit-learn` dependency)
+- Removed experiment logging
+- `_hp_keys()` filters hyperparams dict for training-relevant keys only
+
+**Dependencies:**
+- Dropped `scikit-learn` — KFold implemented with `np.array_split`
+
+**Labels (`labels.py`):**
+- Removed `constants` dependency, hardcoded 9 (CSV format constant)
+
+Retrained model: 100% accuracy across all 5 folds (120 images).
+All 54 tests pass.

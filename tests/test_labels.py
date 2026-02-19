@@ -4,10 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from constants import NUM_PINS
 from labels import load_labels_as_dict, load_labels_as_list, save_labels
 
-_HEADER = "filename," + ",".join(f"p{i}" for i in range(NUM_PINS))
+_HEADER = "filename," + ",".join(f"p{i}" for i in range(9))
 _ROWS = [
     ("c00_r00.png", [1, 1, 0, 0, 1, 0, 0, 0, 0]),
     ("c00_r01.png", [0, 0, 0, 0, 0, 0, 0, 0, 0]),
@@ -51,17 +50,17 @@ class TestSave:
 
     def test_sorted_filenames(self, tmp_path):
         p = tmp_path / "l.csv"
-        save_labels(p, {"z.png": [1] * NUM_PINS, "a.png": [0] * NUM_PINS})
+        save_labels(p, {"z.png": [1] * 9, "a.png": [0] * 9})
         entries = load_labels_as_list(p)
         assert entries[0][0] == "a.png"
 
     def test_overwrites(self, tmp_path):
         p = tmp_path / "l.csv"
-        save_labels(p, {"old.png": [0] * NUM_PINS})
-        save_labels(p, {"new.png": [1] * NUM_PINS})
+        save_labels(p, {"old.png": [0] * 9})
+        save_labels(p, {"new.png": [1] * 9})
         assert "old.png" not in load_labels_as_dict(p) and "new.png" in load_labels_as_dict(p)
 
     def test_creates_parents(self, tmp_path):
         p = tmp_path / "sub" / "dir" / "l.csv"
-        save_labels(p, {"a.png": [0] * NUM_PINS})
+        save_labels(p, {"a.png": [0] * 9})
         assert p.exists()

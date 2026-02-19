@@ -8,9 +8,7 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
-from constants import NUM_PINS
-
-_PIN_COLUMNS = [f"p{i}" for i in range(NUM_PINS)]
+_PIN_COLUMNS = [f"p{i}" for i in range(9)]
 _HEADER = ["filename"] + _PIN_COLUMNS
 
 

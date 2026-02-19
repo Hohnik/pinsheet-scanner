@@ -8,7 +8,7 @@ import pytest
 import torch
 
 from classify import classify_pins_batch, load_classifier
-from constants import NUM_PINS
+from model import NUM_PINS
 
 WEIGHTS_PATH = Path("models/pin_classifier.pt")
 FIXTURE_ALL_DOWN = Path("tests/fixtures/all_down.png")
