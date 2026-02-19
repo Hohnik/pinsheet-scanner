@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from pinsheet_scanner.pipeline import (
+from pipeline import (
     DEFAULT_CLASSIFIER_PATH,
     DEFAULT_DETECTOR_PATH,
     SheetResult,

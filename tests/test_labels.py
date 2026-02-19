@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from pinsheet_scanner.constants import NUM_PINS
-from pinsheet_scanner.labels import (
+from constants import NUM_PINS
+from labels import (
     load_labels_as_dict,
     load_labels_as_list,
     save_labels,

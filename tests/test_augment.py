@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from pinsheet_scanner.augment import AugmentConfig, augment
+from augment import AugmentConfig, augment
 
 
 def _test_image(h: int = 40, w: int = 50, value: int = 200) -> np.ndarray:

@@ -1,6 +1,6 @@
 import numpy as np
 
-from pinsheet_scanner.detect import (
+from detect import (
     Detection,
     _cluster_by_x,
     crop_detections,

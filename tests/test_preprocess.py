@@ -12,12 +12,12 @@ images, already-grayscale vs BGR input), and determinism.
 import numpy as np
 import pytest
 
-from pinsheet_scanner.classify import preprocess_crop
-from pinsheet_scanner.constants import CLASSIFIER_INPUT_SIZE
+from classify import preprocess_crop
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+CLASSIFIER_INPUT_SIZE = (64, 64)
 
 
 def _gray(h: int = 80, w: int = 60, value: int = 180) -> np.ndarray:

@@ -7,12 +7,12 @@ import numpy as np
 import pytest
 import torch
 
-from pinsheet_scanner.classify import (
+from classify import (
     classify_pins_batch_with_confidence,
     load_classifier,
 )
-from pinsheet_scanner.constants import NUM_PINS
-from pinsheet_scanner.model import PinClassifier
+from constants import NUM_PINS
+from model import PinClassifier
 
 WEIGHTS_PATH = Path("models/pin_classifier.pt")
 FIXTURE_ALL_DOWN = Path("tests/fixtures/all_down.png")

@@ -6,9 +6,9 @@ import pytest
 import torch
 import torch.nn as nn
 
-from pinsheet_scanner.constants import NUM_PINS
-from pinsheet_scanner.model import PinClassifier
-from pinsheet_scanner.training import (
+from constants import NUM_PINS
+from model import PinClassifier
+from training import (
     DEFAULTS,
     load_defaults,
     make_scheduler,

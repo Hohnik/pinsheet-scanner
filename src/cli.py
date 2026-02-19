@@ -878,8 +878,18 @@ for (let i = 0; i < CROPS.length; i++) {
   if (!LABELS[CROPS[i]]) { idx = i; break; }
 }
 
+// Pin positions match the new bottom-to-top numbering:
+//   8 (back/top), 6 7, 3 4 5, 1 2, 0 (front/bottom)
 const PIN_POS = [
-  [50, 8], [30, 30], [70, 30], [10, 52], [50, 52], [90, 52], [30, 74], [70, 74], [50, 96]
+  [50, 96],  // 0 – front / bottom
+  [30, 74],  // 1 – 2nd row from bottom, left
+  [70, 74],  // 2 – 2nd row from bottom, right
+  [10, 52],  // 3 – middle row, left
+  [50, 52],  // 4 – middle row, centre
+  [90, 52],  // 5 – middle row, right
+  [30, 30],  // 6 – 2nd row from top, left
+  [70, 30],  // 7 – 2nd row from top, right
+  [50,  8],  // 8 – back / top
 ];
 
 let pins = [0,0,0,0,0,0,0,0,0];
