@@ -81,7 +81,7 @@ class TestProcessSheetErrors:
     """Tests for error handling in process_sheet."""
 
     def test_nonexistent_detector_raises_error(self):
-        from pinsheet_scanner.pipeline import process_sheet
+        from pipeline import process_sheet
 
         with pytest.raises(FileNotFoundError, match="Model weights not found"):
             process_sheet(
@@ -92,7 +92,7 @@ class TestProcessSheetErrors:
     def test_nonexistent_classifier_raises_error(self, tmp_path):
         import cv2
 
-        from pinsheet_scanner.pipeline import process_sheet
+        from pipeline import process_sheet
 
         if not Path("models/pin_diagram.pt").exists():
             pytest.skip("Detector model not found — run training first")
@@ -107,7 +107,7 @@ class TestProcessSheetErrors:
             )
 
     def test_nonexistent_image_raises_error(self):
-        from pinsheet_scanner.pipeline import process_sheet
+        from pipeline import process_sheet
 
         with pytest.raises(FileNotFoundError):
             process_sheet(Path("totally_nonexistent_image.jpg"))
@@ -116,7 +116,7 @@ class TestProcessSheetErrors:
     def test_process_sheet_returns_valid_result(self, tmp_path):
         import cv2
 
-        from pinsheet_scanner.pipeline import process_sheet
+        from pipeline import process_sheet
 
         if not (
             Path("models/pin_diagram.pt").exists()

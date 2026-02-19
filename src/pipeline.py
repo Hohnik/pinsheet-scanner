@@ -11,11 +11,11 @@ from pathlib import Path
 
 import cv2
 
-from pinsheet_scanner.classify import (
+from classify import (
     classify_pins_batch_with_confidence,
     load_classifier,
 )
-from pinsheet_scanner.detect import (
+from detect import (
     crop_detections,
     detect_pin_diagrams,
     draw_detections,

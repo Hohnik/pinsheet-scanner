@@ -23,9 +23,9 @@ from torch.optim.lr_scheduler import (
 )
 from torch.utils.data import DataLoader, Dataset
 
-from .augment import AugmentConfig, augment
-from .classify import preprocess_crop
-from .model import PinClassifier
+from augment import AugmentConfig, augment
+from classify import preprocess_crop
+from model import PinClassifier
 
 # ---------------------------------------------------------------------------
 # Constants

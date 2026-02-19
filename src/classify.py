@@ -24,7 +24,7 @@ import cv2
 import numpy as np
 import torch
 
-from .model import PinClassifier
+from model import PinClassifier
 
 
 def resolve_device(device: torch.device | str | None) -> torch.device:
@@ -69,6 +69,7 @@ def load_classifier(
 
 def preprocess_crop(
     crop: np.ndarray,
+    size: tuple[int, int] = (64, 64),
 ) -> np.ndarray:
     """Convert a raw crop to a normalised float32 array ready for the CNN.
 
@@ -76,14 +77,13 @@ def preprocess_crop(
 
     Args:
         crop: Grayscale or BGR image.
-        size: Target ``(width, height)``.  Defaults to
-            :data:`~pinsheet_scanner.constants.CLASSIFIER_INPUT_SIZE`.
+        size: Target ``(width, height)``.  Defaults to ``(64, 64)``.
 
     Returns:
         Float32 array in [0, 1] with shape ``(height, width)``.
     """
     gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
-    w, h = (64, 64)
+    w, h = size
     resized = cv2.resize(gray, (w, h), interpolation=cv2.INTER_AREA)
     _, binary = cv2.threshold(resized, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     return binary.astype(np.float32) / 255.0

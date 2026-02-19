@@ -13,7 +13,7 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
-from .constants import NUM_PINS
+from constants import NUM_PINS
 
 # Column names: filename, p0, p1, …, p8
 _PIN_COLUMNS = [f"p{i}" for i in range(NUM_PINS)]

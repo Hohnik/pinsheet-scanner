@@ -170,7 +170,7 @@ class TestLoadDefaults:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ):
         monkeypatch.setattr(
-            "pinsheet_scanner.training.HYPERPARAMS_PATH", tmp_path / "nonexistent.json"
+            "training.HYPERPARAMS_PATH", tmp_path / "nonexistent.json"
         )
         defaults = load_defaults()
         assert defaults == DEFAULTS
@@ -189,7 +189,7 @@ class TestLoadDefaults:
         }
         hp_path = tmp_path / "hyperparams.json"
         hp_path.write_text(json.dumps(hp))
-        monkeypatch.setattr("pinsheet_scanner.training.HYPERPARAMS_PATH", hp_path)
+        monkeypatch.setattr("training.HYPERPARAMS_PATH", hp_path)
 
         defaults = load_defaults()
         assert defaults["lr"] == 3e-3
@@ -211,7 +211,7 @@ class TestLoadDefaults:
         }
         hp_path = tmp_path / "hyperparams.json"
         hp_path.write_text(json.dumps(hp))
-        monkeypatch.setattr("pinsheet_scanner.training.HYPERPARAMS_PATH", hp_path)
+        monkeypatch.setattr("training.HYPERPARAMS_PATH", hp_path)
 
         defaults = load_defaults()
         # Every saved value should differ from the builtin defaults

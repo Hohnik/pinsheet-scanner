@@ -9,7 +9,7 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-from .constants import NUM_PINS
+from constants import NUM_PINS
 
 
 def _conv_block(in_ch: int, out_ch: int) -> list[nn.Module]:
