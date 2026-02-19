@@ -80,31 +80,29 @@ class TestSheetResult:
 class TestProcessSheetErrors:
     """Tests for error handling in process_sheet."""
 
-    def test_nonexistent_detector_raises_error(self):
-        from pipeline import process_sheet
-
-        with pytest.raises(FileNotFoundError, match="Model weights not found"):
-            process_sheet(
-                Path("pinsheet_example.jpeg"),
-                model_path=Path("models/nonexistent_detector.pt"),
-            )
-
-    def test_nonexistent_classifier_raises_error(self, tmp_path):
+    def test_nonexistent_detector_is_ignored(self, tmp_path):
+        """YOLO detector is optional — a missing model path is silently skipped."""
         import cv2
 
         from pipeline import process_sheet
 
-        if not Path("models/pin_diagram.pt").exists():
-            pytest.skip("Detector model not found — run training first")
-
         test_image = tmp_path / "test.jpg"
         cv2.imwrite(str(test_image), np.zeros((100, 100, 3), dtype=np.uint8))
 
+        # Should not raise — classical detection runs, finds nothing on a blank image.
+        result = process_sheet(
+            test_image,
+            model_path=Path("models/nonexistent_detector.pt"),
+            classifier_path=Path("models/nonexistent_classifier.pt"),
+        )
+        assert result.throws == []
+
+    def test_nonexistent_classifier_raises_error(self):
+        """load_classifier raises FileNotFoundError for a missing weights file."""
+        from classify import load_classifier
+
         with pytest.raises(FileNotFoundError, match="Classifier weights not found"):
-            process_sheet(
-                test_image,
-                classifier_path=Path("models/nonexistent_classifier.pt"),
-            )
+            load_classifier(Path("models/nonexistent_classifier.pt"))
 
     def test_nonexistent_image_raises_error(self):
         from pipeline import process_sheet

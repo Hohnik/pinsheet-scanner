@@ -6,7 +6,7 @@ _default:
 install:
     uv sync --all-extras
 
-# ── Quality ───────────────────────────────────────────────────────
+# ── Quality ───────────────────────────────────────────────────────────────
 
 # Run unit tests
 [group('quality')]
@@ -28,29 +28,24 @@ lint:
 typecheck:
     basedpyright src
 
-# ── Training ─────────────────────────────────────────────────────
+# ── Training ──────────────────────────────────────────────────────────────
 
-# Train the CNN pin classifier on real labeled crops
+# K-fold cross-validate then retrain the CNN classifier
 [group('training')]
 train *args:
-    uv run pinsheet-scanner train-classifier {{ args }}
+    uv run pinsheet-scanner train {{ args }}
 
 # Hyperparameter tuning with Optuna
 [group('training')]
 tune *args:
     uv run pinsheet-scanner tune {{ args }}
 
-# K-fold cross-validation for the CNN classifier
-[group('training')]
-kfold *args:
-    uv run pinsheet-scanner kfold {{ args }}
-
 # Train the YOLO detector for pin diagram bounding boxes
 [group('training')]
 train-detector *args:
     uv run pinsheet-scanner train-detector {{ args }}
 
-# ── Inference ─────────────────────────────────────────────────────
+# ── Inference ─────────────────────────────────────────────────────────────
 
 # Scan a score sheet and print results
 [group('inference')]
@@ -60,16 +55,14 @@ scan image *args:
 # Extract crops from a score sheet image
 [group('inference')]
 extract image *args:
-    uv run pinsheet-scanner debug-crops {{ image }} {{ args }}
+    uv run pinsheet-scanner extract {{ image }} {{ args }}
 
-# ── Labeling ────────────────────────────────────────
+# ── Labeling & Validation ─────────────────────────────────────────────────
 
 # Open the labeling UI to annotate ground-truth pin states
 [group('labeling')]
 label *args:
     uv run pinsheet-scanner label {{ args }}
-
-# ── Validation ────────────────────────────────────────
 
 # Compare ground-truth labels against CNN predictions
 [group('validation')]

@@ -1,13 +1,15 @@
-"""Shared training primitives for the PinClassifier CNN.
+"""Shared training primitives for the SpatialPinClassifier CNN.
 
 Provides the dataset, training loop, scheduler factory, hyperparameter
-persistence, and train/val splitting used by the CLI training commands
-(train-classifier, tune, kfold).
+persistence, experiment logging, and train/val splitting used by the CLI
+training commands (train, tune, kfold).
 """
 
 from __future__ import annotations
 
+import datetime
 import json
+import subprocess
 from pathlib import Path
 
 import cv2
@@ -25,13 +27,15 @@ from torch.utils.data import DataLoader, Dataset
 
 from augment import AugmentConfig, augment
 from classify import preprocess_crop
-from model import PinClassifier
+from constants import NUM_PINS
+from model import SpatialPinClassifier
 
 # ---------------------------------------------------------------------------
-# Constants
+# Paths & defaults
 # ---------------------------------------------------------------------------
 
 HYPERPARAMS_PATH = Path("models/hyperparams.json")
+EXPERIMENTS_PATH = Path("experiments.jsonl")
 
 DEFAULTS: dict[str, float | int | str] = {
     "lr": 3e-4,
@@ -41,7 +45,7 @@ DEFAULTS: dict[str, float | int | str] = {
     "scheduler": "plateau",
 }
 
-# Heavier augmentation — we only have ~100 training images.
+# Heavier augmentation for training (small real dataset).
 TRAIN_AUGMENT = AugmentConfig(
     brightness_range=(-40, 40),
     noise_sigma_range=(3.0, 12.0),
@@ -65,6 +69,75 @@ def load_defaults() -> dict[str, float | int | str]:
         saved = json.loads(HYPERPARAMS_PATH.read_text())
         return {**DEFAULTS, **saved}
     return dict(DEFAULTS)
+
+
+# ---------------------------------------------------------------------------
+# Model bundle  (C2)
+# ---------------------------------------------------------------------------
+
+
+def _git_sha() -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"], text=True
+        ).strip()
+    except Exception:
+        return "unknown"
+
+
+def save_model_bundle(
+    model: SpatialPinClassifier,
+    output: Path,
+    *,
+    val_accuracy: float | None = None,
+    extra: dict | None = None,
+) -> None:
+    """Save model weights and a JSON sidecar with training metadata.
+
+    The sidecar is written to ``output.with_suffix('.json')`` and is read
+    by :func:`~classify.load_classifier` to determine the architecture.
+
+    Args:
+        model: Trained model to checkpoint.
+        output: Destination ``.pt`` file path.
+        val_accuracy: Best validation accuracy to record in the sidecar.
+        extra: Any additional key-value pairs to include in the sidecar.
+    """
+    output.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(model.state_dict(), output)
+
+    bundle: dict = {
+        "architecture": type(model).__name__,
+        "input_size": [1, 64, 64],
+        "num_pins": NUM_PINS,
+        "trained_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        "git_sha": _git_sha(),
+    }
+    if val_accuracy is not None:
+        bundle["val_accuracy"] = round(val_accuracy, 6)
+    if extra:
+        bundle.update(extra)
+
+    output.with_suffix(".json").write_text(json.dumps(bundle, indent=2) + "\n")
+
+
+# ---------------------------------------------------------------------------
+# Experiment log  (C3)
+# ---------------------------------------------------------------------------
+
+
+def log_experiment(record: dict) -> None:
+    """Append a training record to ``experiments.jsonl``.
+
+    Automatically adds ``timestamp`` and ``git_sha`` fields.
+    """
+    record = {
+        "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
+        "git_sha": _git_sha(),
+        **record,
+    }
+    with open(EXPERIMENTS_PATH, "a") as f:
+        f.write(json.dumps(record) + "\n")
 
 
 # ---------------------------------------------------------------------------
@@ -133,7 +206,6 @@ def make_scheduler(
     epochs: int,
     steps_per_epoch: int,
 ) -> LRScheduler:
-    """Create a learning-rate scheduler by name."""
     match name:
         case "plateau":
             return ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=5)
@@ -157,7 +229,6 @@ def step_scheduler(
     scheduler_name: str,
     metric: float | None = None,
 ) -> None:
-    """Step a per-epoch scheduler (no-op for onecycle which steps per-batch)."""
     if scheduler_name == "onecycle":
         return
     if isinstance(scheduler, ReduceLROnPlateau):
@@ -172,7 +243,7 @@ def step_scheduler(
 
 
 def train_one_epoch(
-    model: PinClassifier,
+    model: SpatialPinClassifier,
     loader: DataLoader,
     criterion: nn.Module,
     optimizer: torch.optim.Optimizer,
@@ -180,7 +251,6 @@ def train_one_epoch(
     *,
     scheduler: LRScheduler | None = None,
 ) -> float:
-    """Train for one epoch, optionally stepping a per-batch scheduler."""
     model.train()
     total_loss = 0.0
     for images, labels in loader:
@@ -197,7 +267,7 @@ def train_one_epoch(
 
 @torch.no_grad()
 def evaluate(
-    model: PinClassifier,
+    model: SpatialPinClassifier,
     loader: DataLoader,
     criterion: nn.Module,
     device: torch.device,
@@ -230,26 +300,19 @@ def train_and_evaluate(
     batch_size: int,
     scheduler_name: str,
 ) -> tuple[float, float]:
-    """Train a model and return ``(best_val_loss, best_val_acc)``.
-
-    Reusable core used by train-classifier, tune, and kfold commands.
-    """
+    """Train a ``SpatialPinClassifier`` and return ``(best_val_loss, best_val_acc)``."""
     torch.manual_seed(seed)
 
     train_ds = RealCropDataset(
         crops_dir, train_entries, augment_cfg=TRAIN_AUGMENT, seed=seed
     )
     val_ds = RealCropDataset(crops_dir, val_entries, augment_cfg=None)
-
-    train_loader = DataLoader(
-        train_ds, batch_size=batch_size, shuffle=True, num_workers=0
-    )
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=0)
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=0)
 
-    model = PinClassifier(dropout=dropout).to(device)
+    model = SpatialPinClassifier(dropout=dropout).to(device)
     criterion = nn.BCEWithLogitsLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
-
     scheduler = make_scheduler(scheduler_name, optimizer, epochs, len(train_loader))
     step_per_batch = scheduler_name == "onecycle"
 
@@ -258,19 +321,12 @@ def train_and_evaluate(
 
     for _epoch in range(1, epochs + 1):
         train_one_epoch(
-            model,
-            train_loader,
-            criterion,
-            optimizer,
-            device,
+            model, train_loader, criterion, optimizer, device,
             scheduler=scheduler if step_per_batch else None,
         )
         val_loss, val_acc = evaluate(model, val_loader, criterion, device)
-
         if val_loss < best_val_loss:
-            best_val_loss = val_loss
-            best_val_acc = val_acc
-
+            best_val_loss, best_val_acc = val_loss, val_acc
         step_scheduler(scheduler, scheduler_name, metric=val_loss)
 
     return best_val_loss, best_val_acc
@@ -289,37 +345,34 @@ def retrain_all(
     dropout: float,
     batch_size: int,
     scheduler_name: str,
+    val_accuracy: float | None = None,
+    extra_bundle: dict | None = None,
 ) -> float:
-    """Train on *all* entries (no validation) and save the best checkpoint.
-
-    Returns the best training loss.
-    """
+    """Train on *all* entries, save best checkpoint with bundle. Returns best loss."""
     torch.manual_seed(seed)
-    output.parent.mkdir(parents=True, exist_ok=True)
 
     ds = RealCropDataset(crops_dir, entries, augment_cfg=TRAIN_AUGMENT, seed=seed)
     loader = DataLoader(ds, batch_size=batch_size, shuffle=True, num_workers=0)
 
-    model = PinClassifier(dropout=dropout).to(device)
+    model = SpatialPinClassifier(dropout=dropout).to(device)
     criterion = nn.BCEWithLogitsLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
-
     scheduler = make_scheduler(scheduler_name, optimizer, epochs, len(loader))
     step_per_batch = scheduler_name == "onecycle"
 
     best_loss = float("inf")
     for _epoch in range(1, epochs + 1):
         loss = train_one_epoch(
-            model,
-            loader,
-            criterion,
-            optimizer,
-            device,
+            model, loader, criterion, optimizer, device,
             scheduler=scheduler if step_per_batch else None,
         )
         if loss < best_loss:
             best_loss = loss
-            torch.save(model.state_dict(), output)
+            save_model_bundle(
+                model, output,
+                val_accuracy=val_accuracy,
+                extra=extra_bundle,
+            )
         step_scheduler(scheduler, scheduler_name, metric=loss)
 
     return best_loss

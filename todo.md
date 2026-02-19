@@ -7,7 +7,7 @@ Status: `[ ]` open · `[~]` in progress · `[x]` done
 
 ## Architecture
 
-### A1 · Spatial ROI classifier [ ]
+### A1 · Spatial ROI classifier [x]
 **Problem:** `PinClassifier` uses `AdaptiveAvgPool2d(1)` before the head, which
 collapses all spatial information into a single vector. The model never "looks at"
 individual pin positions — it reasons from a global texture summary.
@@ -46,7 +46,7 @@ class SpatialPinClassifier(nn.Module):
 
 ---
 
-### A2 · Sheet-level pre-processing pipeline [ ]
+### A2 · Sheet-level pre-processing pipeline [x]
 **Problem:** Raw phone photos are tilted, have perspective distortion, and uneven
 lighting.  YOLO receives the raw image and must generalise over all these variations.
 
@@ -61,7 +61,7 @@ improve both detection robustness and classification accuracy on difficult scans
 
 ---
 
-### A3 · Replace YOLO with a classical grid detector [ ]
+### A3 · Replace YOLO with a classical grid detector [x]
 **Problem:** YOLO is a heavy dependency (ultralytics) for what is essentially a
 structured document — the pin diagrams sit at predictable grid positions once the
 sheet is rectified (A2).
@@ -77,7 +77,7 @@ learned model needed for detection at all; inference becomes deterministic.
 
 ## Domain-specific / Innovative
 
-### D1 · OCR cross-validation of pin counts [ ]
+### D1 · OCR cross-validation of pin counts [x]
 **Problem:** The CNN may misclassify pins with no way to catch it automatically.
 
 **Observation:** Every pin diagram on the score sheet is already annotated with the
@@ -148,7 +148,7 @@ something is wrong.
 
 ## Data Quality
 
-### Q1 · Active learning labeler ordering [ ]
+### Q1 · Active learning labeler ordering [x]
 **Problem:** The labeler presents crops in alphabetical order.  The user must label
 in that fixed sequence regardless of how confident the model already is.
 
@@ -185,7 +185,7 @@ summary of which specific pin is the most common source of error.
 
 ## Code Quality
 
-### C1 · Extract labeler HTML to a template file [ ]
+### C1 · Extract labeler HTML to a template file [x]
 **Problem:** `cli.py` contains a 300-line raw HTML/JS string (`_LABEL_HTML`).  It
 cannot be syntax-highlighted, linted, or edited with web tooling.
 
@@ -195,7 +195,7 @@ cannot be syntax-highlighted, linted, or edited with web tooling.
 
 ---
 
-### C2 · Model bundle format [ ]
+### C2 · Model bundle format [x]
 **Problem:** Models are saved as bare state dicts (`torch.save(model.state_dict())`).
 There is no record of which architecture version, training configuration, or data
 version produced a given `.pt` file.
@@ -217,7 +217,7 @@ before loading weights.
 
 ---
 
-### C3 · Experiment tracking [ ]
+### C3 · Experiment tracking [x]
 **Problem:** Running `kfold` or `tune` multiple times produces no history.  There is
 no way to know which run produced the best model or how accuracy has changed over time.
 
@@ -231,7 +231,7 @@ Expose a `pinsheet-scanner history` command that pretty-prints the table.
 
 ---
 
-### C4 · Test-time augmentation (TTA) [ ]
+### C4 · Test-time augmentation (TTA) [x]
 **Problem:** Single-pass inference is sensitive to scan artifacts (skew, blur,
 lighting) that the model may not have fully learned to ignore.
 
