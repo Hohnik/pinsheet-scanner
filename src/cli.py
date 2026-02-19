@@ -43,12 +43,32 @@ def scan(
     from pipeline import process_sheet
 
     result = process_sheet(image_path=image, classifier_path=classifier, confidence=confidence)
-    print(f"Detected {len(result.throws)} throws across {result.columns} columns\n")
+    n = len(result.throws)
+    print(f"Detected {n} throws across {result.columns} columns\n")
+
+    if not result.throws:
+        print("No pin diagrams found.")
+        return
+
     for t in result.throws:
         pins = "".join(str(p) for p in t.pins_down)
         flag = " ⚠ OCR mismatch" if t.ocr_mismatch else ""
         print(f"C{t.column:>2} | R{t.row:>2} | {pins} => {t.score}"
               f" | det {t.confidence:.2f} | cls {t.classification_confidence:.2f}{flag}")
+
+    # Per-column summaries (Volle/Abr pairs make up a Bahn)
+    cols: dict[int, list[int]] = {}
+    for t in result.throws:
+        cols.setdefault(t.column, []).append(t.score)
+    print()
+    bahn_pairs = list(zip(sorted(cols)[::2], sorted(cols)[1::2]))
+    if bahn_pairs and all(len(cols[v]) == len(cols[a]) for v, a in bahn_pairs):
+        for v, a in bahn_pairs:
+            vt, at = sum(cols[v]), sum(cols[a])
+            print(f"Bahn (C{v}+C{a}):  Volle={vt}  Abr={at}  Total={vt + at}")
+    else:
+        for c in sorted(cols):
+            print(f"Col {c}: {sum(cols[c])}")
     print(f"\nTotal pins knocked down: {result.total_pins}")
 
 

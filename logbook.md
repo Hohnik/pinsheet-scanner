@@ -190,3 +190,23 @@ All 61 tests pass.
 
 Retrained model: 100% accuracy across all 5 folds (120 images).
 All 54 tests pass.
+
+### Detection strategy fix — YOLO-first
+
+**Problem:** Classical detector found 6-11 false/sparse matches, passed the
+`min_classical=6` threshold, and prevented YOLO from running. Result: sheets
+001-003 showed 6-11 detections instead of 90-120.
+
+**Fix:** Inverted priority — always use YOLO when available, fall back to
+classical only when YOLO model is missing or returns nothing.
+
+**Results (verified against printed GESAMTERGEBNIS on every sheet):**
+- Sheet 001: 11 → 90 detections → total 335 ✓
+- Sheet 002:  6 → 120 detections → total 472 ✓  (every column matches)
+- Sheet 003:  8 → 120 detections → total 454 ✓  (every column matches)
+- Sheet 005: 120 detections → total 452 ✓ (every column matches)
+- original:  120 detections → total 499 ✓ (every column matches)
+- Sheet 004: 4 detections (YOLO model not trained on this pin diagram style)
+
+Added per-Bahn summary to scan output.
+All 54 tests pass.

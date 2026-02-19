@@ -111,14 +111,13 @@ def detect_pin_diagrams(
     model: YOLOModel | None,
     image: np.ndarray,
     confidence_threshold: float = 0.25,
-    *,
-    min_classical: int = 6,
 ) -> list[Detection]:
-    """Classical detection first; YOLO fallback if fewer than *min_classical* found."""
-    detections = detect_pin_diagrams_classical(image)
-    if len(detections) >= min_classical or model is None:
-        return detections
-    return detect_pin_diagrams_yolo(model, image, confidence_threshold)
+    """YOLO first (if available); classical fallback otherwise."""
+    if model is not None:
+        dets = detect_pin_diagrams_yolo(model, image, confidence_threshold)
+        if dets:
+            return dets
+    return detect_pin_diagrams_classical(image)
 
 
 def _cluster_by_x(detections: list[Detection], gap_factor: float = 0.5) -> list[list[Detection]]:
