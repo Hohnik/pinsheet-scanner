@@ -14,14 +14,15 @@ New fields on ``ThrowResult``
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 import cv2
 
 from classify import classify_pins_batch_with_confidence, load_classifier
 from detect import (
+    YOLOModel,
     crop_detections,
     detect_pin_diagrams,
     draw_detections,
@@ -30,6 +31,8 @@ from detect import (
 )
 from ocr import cross_validate
 from preprocess import rectify_sheet
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -91,7 +94,7 @@ def process_sheet(
     rectified = rectify_sheet(raw)  # always grayscale after this
 
     # ── A3: classical detection, YOLO fallback ────────────────────────────
-    yolo: Any | None = None
+    yolo: YOLOModel | None = None
     detector_path = model_path or DEFAULT_DETECTOR_PATH
     if detector_path.exists():
         yolo = load_model(detector_path)
@@ -107,6 +110,7 @@ def process_sheet(
     crops = crop_detections(rectified, sorted_dets)
 
     if not crops:
+        logger.warning("No pin diagrams detected in %s", image_path)
         return SheetResult(columns=0, rows_per_column=0)
 
     # ── A1 + C4: spatial ROI classifier with TTA ──────────────────────────

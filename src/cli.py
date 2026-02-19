@@ -14,6 +14,7 @@ accuracy        Validate CNN predictions against ground-truth labels.
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Annotated, Optional
 
@@ -26,8 +27,10 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 
+logger = logging.getLogger(__name__)
+
 # ---------------------------------------------------------------------------
-# Shared option types
+# Shared option types & helpers
 # ---------------------------------------------------------------------------
 
 CropsOpt = Annotated[Path, typer.Option(help="Directory containing crop PNGs.")]
@@ -49,6 +52,14 @@ def _load_labeler_html() -> str:
     return (Path(__file__).parent / "labeler.html").read_text()
 
 
+def _setup_logging() -> None:
+    """Configure root logger for CLI output."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(message)s",
+    )
+
+
 # ── Inference ─────────────────────────────────────────────────────────────
 
 
@@ -63,6 +74,7 @@ def scan(
     ] = 0.25,
 ) -> None:
     """Scan a score sheet and print per-throw results."""
+    _setup_logging()
     from pipeline import process_sheet
 
     result = process_sheet(
@@ -85,6 +97,21 @@ def scan(
 # ── Training ──────────────────────────────────────────────────────────────
 
 
+def _format_kfold_table(result) -> str:  # noqa: ANN001 (KFoldResult)
+    """Format a K-fold result summary as a printable table."""
+    lines = [
+        f"\n{'=' * 50}",
+        f"{'Fold':>5}  {'Val Loss':>9}  {'Val Acc':>8}",
+        "-" * 28,
+    ]
+    for i, (loss, acc) in enumerate(zip(result.losses, result.accuracies)):
+        lines.append(f"{i + 1:>5}  {loss:>9.4f}  {acc:>7.2%}")
+    lines.append("-" * 28)
+    lines.append(f"{'Mean':>5}  {result.mean_loss:>9.4f}  {result.mean_acc:>7.2%}")
+    lines.append(f"{'±Std':>5}  {result.std_loss:>9.4f}  {result.std_acc:>7.2%}")
+    return "\n".join(lines)
+
+
 @app.command()
 def train(
     crops: CropsOpt = Path("debug_crops/raw"),
@@ -101,28 +128,27 @@ def train(
     (run ``tune`` first to generate it).  Saves a model bundle sidecar
     alongside the weights and appends a record to ``experiments.jsonl``.
     """
-    import numpy as np
-    from sklearn.model_selection import KFold
-
+    _setup_logging()
     from classify import resolve_device
     from labels import load_labels_as_list
     from training import (
         HYPERPARAMS_PATH,
+        kfold_train,
         load_defaults,
         log_experiment,
-        retrain_all,
-        train_and_evaluate,
     )
 
     _require_path(labels, "Labels", "Run `pinsheet-scanner label` first.")
     _require_path(crops, "Crops directory")
 
     defaults = load_defaults()
-    lr = float(defaults["lr"])
-    weight_decay = float(defaults["weight_decay"])
-    dropout = float(defaults["dropout"])
-    batch_size = int(defaults["batch_size"])
-    scheduler = str(defaults["scheduler"])
+    hp_kwargs = dict(
+        lr=float(defaults["lr"]),
+        weight_decay=float(defaults["weight_decay"]),
+        dropout=float(defaults["dropout"]),
+        batch_size=int(defaults["batch_size"]),
+        scheduler_name=str(defaults["scheduler"]),
+    )
 
     all_entries = load_labels_as_list(labels)
     if len(all_entries) < folds:
@@ -131,75 +157,37 @@ def train(
         )
 
     dev = resolve_device(None)
-    hp_kwargs = dict(
-        lr=lr, weight_decay=weight_decay, dropout=dropout,
-        batch_size=batch_size, scheduler_name=scheduler,
-    )
 
     if HYPERPARAMS_PATH.exists():
         print(f"Loaded tuned defaults from {HYPERPARAMS_PATH}")
     print(f"Device: {dev}")
     print(f"Total: {len(all_entries)}  |  Folds: {folds}  |  Epochs: {epochs}")
     print(
-        f"Hyperparams: lr={lr:.0e}  wd={weight_decay:.0e}  "
-        f"dropout={dropout}  bs={batch_size}  sched={scheduler}\n"
+        f"Hyperparams: lr={hp_kwargs['lr']:.0e}  wd={hp_kwargs['weight_decay']:.0e}  "
+        f"dropout={hp_kwargs['dropout']}  bs={hp_kwargs['batch_size']}  "
+        f"sched={hp_kwargs['scheduler_name']}\n"
     )
 
-    kf = KFold(n_splits=folds, shuffle=True, random_state=_SEED)
-    losses: list[float] = []
-    accs: list[float] = []
-
-    for fold, (train_idx, val_idx) in enumerate(kf.split(all_entries)):
-        train_e = [all_entries[i] for i in train_idx]
-        val_e = [all_entries[i] for i in val_idx]
-        print(
-            f"Fold {fold + 1}/{folds}  (train={len(train_e)}, val={len(val_e)}) ",
-            end="",
-            flush=True,
-        )
-        val_loss, val_acc = train_and_evaluate(
-            train_entries=train_e, val_entries=val_e,
-            crops_dir=crops, epochs=epochs, device=dev,
-            seed=_SEED + fold, **hp_kwargs,
-        )
-        losses.append(val_loss)
-        accs.append(val_acc)
-        print(f"→ loss={val_loss:.4f}  acc={val_acc:.2%}")
-
-    mean_loss = float(np.mean(losses))
-    mean_acc = float(np.mean(accs))
-    std_acc = float(np.std(accs))
-
-    print(f"\n{'=' * 50}")
-    header = f"{'Fold':>5}  {'Val Loss':>9}  {'Val Acc':>8}"
-    print(header)
-    print("-" * len(header))
-    for i, (loss, acc) in enumerate(zip(losses, accs)):
-        print(f"{i + 1:>5}  {loss:>9.4f}  {acc:>7.2%}")
-    print("-" * len(header))
-    print(f"{'Mean':>5}  {mean_loss:>9.4f}  {mean_acc:>7.2%}")
-    print(f"{'±Std':>5}  {float(np.std(losses)):>9.4f}  {std_acc:>7.2%}")
-
-    print(f"\nRetraining on all {len(all_entries)} images for {epochs} epochs...")
-    best_loss = retrain_all(
-        all_entries, crops, output, dev, epochs, _SEED,
-        val_accuracy=mean_acc,
-        extra_bundle={"folds": folds, "epochs": epochs, **{k: v for k, v in hp_kwargs.items() if k != "scheduler_name"}},
-        **hp_kwargs,
+    result = kfold_train(
+        all_entries, crops, output,
+        folds=folds, epochs=epochs, device=dev, seed=_SEED,
+        hp_kwargs=hp_kwargs,
     )
-    print(f"  Final train loss: {best_loss:.4f}")
-    print(f"  Saved to {output.resolve()}")
+
+    print(_format_kfold_table(result))
+    print(f"\n  Final train loss: {result.final_train_loss:.4f}")
+    print(f"  Saved to {result.output.resolve()}")
 
     log_experiment({
         "command": "train",
         "folds": folds, "epochs": epochs,
-        "val_acc_mean": round(mean_acc, 6),
-        "val_acc_std": round(std_acc, 6),
-        "val_loss_mean": round(mean_loss, 6),
+        "val_acc_mean": round(result.mean_acc, 6),
+        "val_acc_std": round(result.std_acc, 6),
+        "val_loss_mean": round(result.mean_loss, 6),
         "hyperparams": hp_kwargs,
         "output": str(output),
     })
-    print(f"  Experiment logged to experiments.jsonl")
+    print("  Experiment logged to experiments.jsonl")
 
 
 @app.command("train-detector")
@@ -212,6 +200,7 @@ def train_detector(
     imgsz: Annotated[int, typer.Option(help="Training image size.")] = 640,
 ) -> None:
     """Train a YOLOv11n model to detect pin diagrams on score sheets."""
+    _setup_logging()
     _require_path(data, "Dataset config", "Populate data/train/ and data/val/ first.")
 
     from ultralytics import YOLO  # type: ignore[attr-defined]
@@ -244,6 +233,7 @@ def tune(
     epochs: Annotated[int, typer.Option(help="Epochs per trial.")] = 40,
 ) -> None:
     """Hyperparameter search with Optuna — saves best config to models/hyperparams.json."""
+    _setup_logging()
     import optuna
 
     from classify import resolve_device
@@ -315,6 +305,34 @@ def tune(
 # ── Debugging ─────────────────────────────────────────────────────────────
 
 
+def _load_detection_pipeline(
+    image_path: Path,
+    confidence: float = 0.25,
+):
+    """Shared setup for commands that detect + optionally classify crops.
+
+    Returns:
+        ``(rectified, sorted_dets, crops)`` — grayscale image, sorted
+        detections, and cropped pin diagrams.
+    """
+    import cv2
+
+    from detect import crop_detections, detect_pin_diagrams, load_model, sort_detections
+    from pipeline import DEFAULT_DETECTOR_PATH
+    from preprocess import rectify_sheet
+
+    raw = cv2.imread(str(image_path))
+    if raw is None:
+        raise typer.BadParameter(f"Could not load image: {image_path}")
+
+    rectified = rectify_sheet(raw)
+    yolo = load_model(DEFAULT_DETECTOR_PATH) if DEFAULT_DETECTOR_PATH.exists() else None
+    sorted_dets = sort_detections(detect_pin_diagrams(yolo, rectified, confidence))
+    crops = crop_detections(rectified, sorted_dets)
+
+    return rectified, sorted_dets, crops
+
+
 @app.command()
 def extract(
     image: Annotated[Path, typer.Argument(help="Path to the scanned score sheet.")],
@@ -322,35 +340,27 @@ def extract(
     confidence: Annotated[float, typer.Option(help="Detection confidence.")] = 0.25,
 ) -> None:
     """Extract and classify pin-diagram crops from a sheet image."""
+    _setup_logging()
     import csv
 
     import cv2
 
     from classify import classify_pins_batch_with_confidence, load_classifier
-    from detect import crop_detections, detect_pin_diagrams, draw_detections, load_model, sort_detections
-    from pipeline import DEFAULT_CLASSIFIER_PATH, DEFAULT_DETECTOR_PATH
-    from preprocess import rectify_sheet
+    from detect import draw_detections
+    from pipeline import DEFAULT_CLASSIFIER_PATH
 
     _require_path(image, "Image")
 
     raw_dir = output / "raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
 
-    raw = cv2.imread(str(image))
-    if raw is None:
-        raise typer.BadParameter(f"Could not load image: {image}")
-
-    rectified = rectify_sheet(raw)
-
-    yolo = load_model(DEFAULT_DETECTOR_PATH) if DEFAULT_DETECTOR_PATH.exists() else None
-    sorted_dets = sort_detections(detect_pin_diagrams(yolo, rectified, confidence))
+    rectified, sorted_dets, crops = _load_detection_pipeline(image, confidence)
     print(f"Detected {len(sorted_dets)} pin diagrams")
 
     vis = cv2.cvtColor(rectified, cv2.COLOR_GRAY2BGR)
     cv2.imwrite(str(output / "annotated_full.jpg"), draw_detections(vis, sorted_dets))
     print(f"Saved annotated image to {output / 'annotated_full.jpg'}")
 
-    crops = crop_detections(rectified, sorted_dets)
     names = [f"c{d.column:02d}_r{d.row:02d}" for d in sorted_dets]
     for name, crop in zip(names, crops):
         cv2.imwrite(str(raw_dir / f"{name}.png"), crop)
@@ -363,7 +373,9 @@ def extract(
     else:
         print(f"\nClassifier not found at {DEFAULT_CLASSIFIER_PATH} — skipping.")
 
-    header = f"{'Name':<20} {'Size':<12}" + (f" {'Pins':>10} {'Score':>6} {'Conf':>6}" if has_classifier else "")
+    header = f"{'Name':<20} {'Size':<12}" + (
+        f" {'Pins':>10} {'Score':>6} {'Conf':>6}" if has_classifier else ""
+    )
     print(f"\n{header}")
     print("-" * len(header))
 
@@ -405,6 +417,7 @@ def label(
     Crops are presented in ascending CNN-confidence order (least certain
     first) so each session targets the examples the model needs most.
     """
+    _setup_logging()
     import json as _json
     import webbrowser
     from http.server import HTTPServer, SimpleHTTPRequestHandler
@@ -428,7 +441,7 @@ def label(
     print(f"Found {len(all_names)} crops in {crops}")
     print(f"Already labeled: {labeled_count}/{len(all_names)}")
 
-    # ── Q1: run CNN for suggestions + sort by ascending confidence ─────────
+    # ── Run CNN for suggestions + sort by ascending confidence ─────────
     predictions: dict[str, dict] = {}
     if DEFAULT_CLASSIFIER_PATH.exists():
         print("Running CNN for suggestions (sorted by confidence)...")
@@ -457,7 +470,8 @@ def label(
 
     def make_handler():
         class Handler(SimpleHTTPRequestHandler):
-            def log_message(self, fmt, *args): pass  # silence request log
+            def log_message(self, fmt, *args):
+                pass  # silence request log
 
             def do_GET(self):
                 parsed = urlparse(self.path)
@@ -525,6 +539,7 @@ def accuracy(
     ] = None,
 ) -> None:
     """Compare ground-truth labels against CNN predictions."""
+    _setup_logging()
     import cv2
 
     from classify import classify_pins_batch_with_confidence, load_classifier
@@ -594,7 +609,9 @@ def accuracy(
     for i in range(NUM_PINS):
         acc = per_pin_correct[i] / per_pin_total[i] * 100 if per_pin_total[i] else 0
         marker = "" if acc >= 95 else " ←" if acc >= 80 else " ← LOW"
-        print(f"  {i:>4}  {per_pin_correct[i]:>8}  {per_pin_total[i]:>6}  {acc:>6.1f}%{marker}")
+        print(
+            f"  {i:>4}  {per_pin_correct[i]:>8}  {per_pin_total[i]:>6}  {acc:>6.1f}%{marker}"
+        )
 
     if mismatches:
         print(f"\n  Mismatches ({len(mismatches)}):")

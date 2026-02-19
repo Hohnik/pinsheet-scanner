@@ -13,12 +13,18 @@ Detection strategy
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import cv2
 import numpy as np
+
+logger = logging.getLogger(__name__)
+
+# Type alias — YOLO model objects don't expose a usable base class.
+YOLOModel = Any
 
 
 @dataclass
@@ -50,7 +56,7 @@ class Detection:
         return int(self.y_center + self.height / 2)
 
 
-def load_model(weights_path: Path) -> Any:
+def load_model(weights_path: Path) -> YOLOModel:
     """Load a trained YOLO model from *weights_path*."""
     from ultralytics import YOLO as _YOLO  # type: ignore[attr-defined]  # noqa: N811
 
@@ -148,7 +154,7 @@ def detect_pin_diagrams_classical(image: np.ndarray) -> list[Detection]:
 
 
 def detect_pin_diagrams_yolo(
-    model: Any,
+    model: YOLOModel,
     image: np.ndarray,
     confidence_threshold: float = 0.25,
 ) -> list[Detection]:
@@ -181,7 +187,7 @@ def detect_pin_diagrams_yolo(
 
 
 def detect_pin_diagrams(
-    model: Any | None,
+    model: YOLOModel | None,
     image: np.ndarray,
     confidence_threshold: float = 0.25,
     *,
@@ -201,7 +207,15 @@ def detect_pin_diagrams(
     """
     detections = detect_pin_diagrams_classical(image)
     if len(detections) >= min_classical or model is None:
+        logger.debug(
+            "Classical detector found %d diagrams (threshold=%d)",
+            len(detections), min_classical,
+        )
         return detections
+    logger.info(
+        "Classical detector found only %d diagrams (< %d), falling back to YOLO",
+        len(detections), min_classical,
+    )
     return detect_pin_diagrams_yolo(model, image, confidence_threshold)
 
 

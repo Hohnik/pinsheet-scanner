@@ -86,3 +86,33 @@ Removed: `train-classifier`, `kfold`, `debug-crops`.
 Added: `train` (merges kfold + retrain), `extract` (renamed debug-crops).
 Removed flags: `--device`, `--seed`, `--no-open`, `--port`, `--no-retrain`,
 `--val-count`. `justfile` updated accordingly.
+
+### Codebase quality improvements — refactoring round
+
+Analysed all source modules (excluding tests) for quality issues. Implemented:
+
+1. **README.md** — Replaced placeholder with full project docs (features, install,
+   quick start, architecture overview, CLI command reference, dev instructions).
+
+2. **training.py** — Extracted `TrainingComponents` dataclass and `build_training_components()`
+   factory to eliminate duplicated model/optimizer/scheduler setup between
+   `train_and_evaluate` and `retrain_all`. Added `KFoldResult` dataclass and
+   `kfold_train()` function to move K-fold cross-validation logic out of the CLI.
+
+3. **classify.py** — Removed module-level `_TTA_RNG` (global mutable state with fixed
+   seed). TTA now creates a fresh `np.random.default_rng(42)` per batch call —
+   thread-safe and deterministic.
+
+4. **cli.py** — `train` command reduced from ~80 lines of K-fold logic to ~30 lines
+   that delegate to `training.kfold_train()`. Added `_load_detection_pipeline()` shared
+   helper for detection+crop setup. Added `_setup_logging()` for consistent log config.
+
+5. **detect.py / pipeline.py** — Replaced bare `Any` type for YOLO model with `YOLOModel`
+   type alias. Added `logging` calls for detection fallback decisions.
+
+6. **preprocess.py** — Added `logging` for fallback when no sheet quad is found.
+
+7. **`src/__init__.py`** — New file exposing clean public API (`process_sheet`,
+   `load_classifier`, `classify_pins_batch_with_confidence`, `Detection`, etc.).
+
+All 134 tests pass.

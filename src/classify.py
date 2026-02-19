@@ -44,8 +44,6 @@ _TTA_CFG = AugmentConfig(
     grid_line_probability=0.0,
 )
 
-_TTA_RNG = np.random.default_rng(42)
-
 # Union type accepted by all public functions in this module.
 AnyClassifier = PinClassifier | SpatialPinClassifier
 
@@ -127,10 +125,10 @@ def preprocess_crop(
     return binary.astype(np.float32) / 255.0
 
 
-def _preprocess_with_tta(crop: np.ndarray) -> np.ndarray:
+def _preprocess_with_tta(crop: np.ndarray, rng: np.random.Generator) -> np.ndarray:
     """Augment a raw crop then preprocess it for one TTA pass."""
     gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
-    return preprocess_crop(augment(gray, _TTA_RNG, _TTA_CFG))
+    return preprocess_crop(augment(gray, rng, _TTA_CFG))
 
 
 def _confidence_from_probs(probs: torch.Tensor) -> float:
@@ -166,12 +164,13 @@ def classify_pins_batch_with_confidence(
     if device is None:
         device = next(model.parameters()).device
 
+    rng = np.random.default_rng(42)
     acc: torch.Tensor | None = None
     for pass_idx in range(TTA_PASSES):
         if pass_idx == 0:
             arrays = [preprocess_crop(c) for c in crops]
         else:
-            arrays = [_preprocess_with_tta(c) for c in crops]
+            arrays = [_preprocess_with_tta(c, rng) for c in crops]
 
         batch = torch.from_numpy(np.stack(arrays)).unsqueeze(1).to(device)
         probs = torch.sigmoid(model(batch))  # (B, 9)

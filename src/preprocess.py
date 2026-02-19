@@ -10,8 +10,12 @@ function falls back to returning the original grayscale with CLAHE only.
 
 from __future__ import annotations
 
+import logging
+
 import cv2
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 # Target rectified image dimensions (portrait, A4-ish aspect ratio).
 RECTIFIED_WIDTH: int = 1200
@@ -88,6 +92,7 @@ def rectify_sheet(
 
     quad = find_sheet_quad(gray)
     if quad is None:
+        logger.debug("No sheet quad found — falling back to CLAHE only")
         return clahe.apply(gray)
 
     dst = np.array(

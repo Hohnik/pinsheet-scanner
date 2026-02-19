@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import datetime
 import json
+import logging
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
@@ -238,6 +240,50 @@ def step_scheduler(
 
 
 # ---------------------------------------------------------------------------
+# Training setup — shared by train_and_evaluate / retrain_all
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class TrainingComponents:
+    """All objects needed for a training run, built from common parameters."""
+
+    model: SpatialPinClassifier
+    criterion: nn.Module
+    optimizer: torch.optim.Optimizer
+    scheduler: LRScheduler
+    scheduler_name: str
+    step_per_batch: bool
+
+
+def build_training_components(
+    device: torch.device,
+    seed: int,
+    *,
+    lr: float,
+    weight_decay: float,
+    dropout: float,
+    scheduler_name: str,
+    epochs: int,
+    steps_per_epoch: int,
+) -> TrainingComponents:
+    """Construct model, criterion, optimizer, and scheduler."""
+    torch.manual_seed(seed)
+    model = SpatialPinClassifier(dropout=dropout).to(device)
+    criterion = nn.BCEWithLogitsLoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+    scheduler = make_scheduler(scheduler_name, optimizer, epochs, steps_per_epoch)
+    return TrainingComponents(
+        model=model,
+        criterion=criterion,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        scheduler_name=scheduler_name,
+        step_per_batch=scheduler_name == "onecycle",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Training loop
 # ---------------------------------------------------------------------------
 
@@ -301,8 +347,6 @@ def train_and_evaluate(
     scheduler_name: str,
 ) -> tuple[float, float]:
     """Train a ``SpatialPinClassifier`` and return ``(best_val_loss, best_val_acc)``."""
-    torch.manual_seed(seed)
-
     train_ds = RealCropDataset(
         crops_dir, train_entries, augment_cfg=TRAIN_AUGMENT, seed=seed
     )
@@ -310,24 +354,25 @@ def train_and_evaluate(
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=0)
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=0)
 
-    model = SpatialPinClassifier(dropout=dropout).to(device)
-    criterion = nn.BCEWithLogitsLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
-    scheduler = make_scheduler(scheduler_name, optimizer, epochs, len(train_loader))
-    step_per_batch = scheduler_name == "onecycle"
+    tc = build_training_components(
+        device, seed,
+        lr=lr, weight_decay=weight_decay, dropout=dropout,
+        scheduler_name=scheduler_name, epochs=epochs,
+        steps_per_epoch=len(train_loader),
+    )
 
     best_val_loss = float("inf")
     best_val_acc = 0.0
 
     for _epoch in range(1, epochs + 1):
         train_one_epoch(
-            model, train_loader, criterion, optimizer, device,
-            scheduler=scheduler if step_per_batch else None,
+            tc.model, train_loader, tc.criterion, tc.optimizer, device,
+            scheduler=tc.scheduler if tc.step_per_batch else None,
         )
-        val_loss, val_acc = evaluate(model, val_loader, criterion, device)
+        val_loss, val_acc = evaluate(tc.model, val_loader, tc.criterion, device)
         if val_loss < best_val_loss:
             best_val_loss, best_val_acc = val_loss, val_acc
-        step_scheduler(scheduler, scheduler_name, metric=val_loss)
+        step_scheduler(tc.scheduler, tc.scheduler_name, metric=val_loss)
 
     return best_val_loss, best_val_acc
 
@@ -349,30 +394,129 @@ def retrain_all(
     extra_bundle: dict | None = None,
 ) -> float:
     """Train on *all* entries, save best checkpoint with bundle. Returns best loss."""
-    torch.manual_seed(seed)
-
     ds = RealCropDataset(crops_dir, entries, augment_cfg=TRAIN_AUGMENT, seed=seed)
     loader = DataLoader(ds, batch_size=batch_size, shuffle=True, num_workers=0)
 
-    model = SpatialPinClassifier(dropout=dropout).to(device)
-    criterion = nn.BCEWithLogitsLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
-    scheduler = make_scheduler(scheduler_name, optimizer, epochs, len(loader))
-    step_per_batch = scheduler_name == "onecycle"
+    tc = build_training_components(
+        device, seed,
+        lr=lr, weight_decay=weight_decay, dropout=dropout,
+        scheduler_name=scheduler_name, epochs=epochs,
+        steps_per_epoch=len(loader),
+    )
 
     best_loss = float("inf")
     for _epoch in range(1, epochs + 1):
         loss = train_one_epoch(
-            model, loader, criterion, optimizer, device,
-            scheduler=scheduler if step_per_batch else None,
+            tc.model, loader, tc.criterion, tc.optimizer, device,
+            scheduler=tc.scheduler if tc.step_per_batch else None,
         )
         if loss < best_loss:
             best_loss = loss
             save_model_bundle(
-                model, output,
+                tc.model, output,
                 val_accuracy=val_accuracy,
                 extra=extra_bundle,
             )
-        step_scheduler(scheduler, scheduler_name, metric=loss)
+        step_scheduler(tc.scheduler, tc.scheduler_name, metric=loss)
 
     return best_loss
+
+
+# ---------------------------------------------------------------------------
+# K-fold cross-validation + retrain
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class KFoldResult:
+    """Summary of a K-fold cross-validation run."""
+
+    losses: list[float]
+    accuracies: list[float]
+    mean_loss: float
+    mean_acc: float
+    std_acc: float
+    std_loss: float
+    final_train_loss: float
+    output: Path
+
+
+def kfold_train(
+    all_entries: list[tuple[str, list[int]]],
+    crops_dir: Path,
+    output: Path,
+    *,
+    folds: int,
+    epochs: int,
+    device: torch.device,
+    seed: int = 42,
+    hp_kwargs: dict,
+) -> KFoldResult:
+    """Run K-fold cross-validation, retrain on all data, and save the model.
+
+    This is the core logic extracted from the ``train`` CLI command so it
+    can be tested and reused programmatically.
+
+    Args:
+        all_entries: Full labeled dataset as ``(filename, pins)`` pairs.
+        crops_dir: Directory containing crop images.
+        output: Where to save the final ``.pt`` weights.
+        folds: Number of cross-validation folds.
+        epochs: Training epochs per fold (and final retrain).
+        device: Torch device.
+        seed: Random seed for reproducibility.
+        hp_kwargs: Hyperparameter dict with keys ``lr``, ``weight_decay``,
+            ``dropout``, ``batch_size``, ``scheduler_name``.
+
+    Returns:
+        :class:`KFoldResult` with per-fold and aggregate metrics.
+    """
+    from sklearn.model_selection import KFold
+
+    logger = logging.getLogger(__name__)
+
+    kf = KFold(n_splits=folds, shuffle=True, random_state=seed)
+    losses: list[float] = []
+    accs: list[float] = []
+
+    for fold, (train_idx, val_idx) in enumerate(kf.split(all_entries)):
+        train_e = [all_entries[i] for i in train_idx]
+        val_e = [all_entries[i] for i in val_idx]
+        logger.info(
+            "Fold %d/%d  (train=%d, val=%d)", fold + 1, folds, len(train_e), len(val_e),
+        )
+        val_loss, val_acc = train_and_evaluate(
+            train_entries=train_e, val_entries=val_e,
+            crops_dir=crops_dir, epochs=epochs, device=device,
+            seed=seed + fold, **hp_kwargs,
+        )
+        losses.append(val_loss)
+        accs.append(val_acc)
+        logger.info("  → loss=%.4f  acc=%.2f%%", val_loss, val_acc * 100)
+
+    mean_loss = float(np.mean(losses))
+    mean_acc = float(np.mean(accs))
+    std_acc = float(np.std(accs))
+    std_loss = float(np.std(losses))
+
+    logger.info("Retraining on all %d images for %d epochs...", len(all_entries), epochs)
+    extra_bundle = {
+        "folds": folds, "epochs": epochs,
+        **{k: v for k, v in hp_kwargs.items() if k != "scheduler_name"},
+    }
+    best_loss = retrain_all(
+        all_entries, crops_dir, output, device, epochs, seed,
+        val_accuracy=mean_acc, extra_bundle=extra_bundle,
+        **hp_kwargs,
+    )
+
+    return KFoldResult(
+        losses=losses,
+        accuracies=accs,
+        mean_loss=mean_loss,
+        mean_acc=mean_acc,
+        std_acc=std_acc,
+        std_loss=std_loss,
+        final_train_loss=best_loss,
+        output=output,
+    )
