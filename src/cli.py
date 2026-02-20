@@ -245,11 +245,11 @@ def train_detector(
     imgsz: Annotated[int, typer.Option(help="Training image size.")] = 640,
 ) -> None:
     """Train a YOLOv11n model to detect pin diagrams."""
-    _require(data, "Dataset config", "Populate data/train/ and data/val/ first.")
+    _require(data, "Dataset config", "Populate data/detector/train/ and data/detector/val/ first.")
     from ultralytics import YOLO  # type: ignore[attr-defined]
 
     yolo = YOLO(model)
-    yolo.train(data=str(data), epochs=epochs, imgsz=imgsz, batch=-1,
+    yolo.train(data=str(data.resolve()), epochs=epochs, imgsz=imgsz, batch=-1,
                project="runs", name="pin_diagram",
                hsv_h=0.0, hsv_s=0.0, hsv_v=0.2, degrees=5.0, translate=0.05,
                scale=0.2, flipud=0.0, fliplr=0.0, mosaic=0.5)
@@ -351,11 +351,11 @@ def _detect_and_crop(image_path: Path, confidence: float = 0.25):
 
 @app.command()
 def extract(
-    image: Annotated[Path, typer.Argument(help="Path to the scanned score sheet.")],
+    images: Annotated[list[Path], typer.Argument(help="Path(s) to scanned score sheet(s).")],
     output: Annotated[Path, typer.Option(help="Output directory.")] = Path("output"),
     confidence: Annotated[float, typer.Option(help="Detection confidence.")] = 0.25,
 ) -> None:
-    """Extract and classify pin-diagram crops from a sheet."""
+    """Extract and classify pin-diagram crops from one or more sheets."""
     import csv
     import cv2
 
@@ -363,43 +363,54 @@ def extract(
     from detect import draw_detections
     from pipeline import DEFAULT_CLASSIFIER_PATH
 
-    _require(image, "Image")
-    raw_dir = output / "raw"
-    raw_dir.mkdir(parents=True, exist_ok=True)
-
-    rectified, dets, crops = _detect_and_crop(image, confidence)
-    print(f"Detected {len(dets)} pin diagrams")
-
-    vis = cv2.cvtColor(rectified, cv2.COLOR_GRAY2BGR)
-    cv2.imwrite(str(output / "annotated_full.jpg"), draw_detections(vis, dets))
-
-    names = [f"c{d.column:02d}_r{d.row:02d}" for d in dets]
-    for name, crop in zip(names, crops):
-        cv2.imwrite(str(raw_dir / f"{name}.png"), crop)
-
-    classifications = []
+    cnn, dev = None, None
     if DEFAULT_CLASSIFIER_PATH.exists():
         cnn, dev = load_classifier(DEFAULT_CLASSIFIER_PATH)
-        classifications = classify_pins_batch(cnn, crops, device=dev)
 
-    csv_rows: list[dict] = []
-    for i, (det, crop) in enumerate(zip(dets, crops)):
-        row: dict = {"name": names[i], "column": det.column, "row": det.row}
-        if i < len(classifications):
-            pins, conf = classifications[i]
-            row.update(pins="".join(str(p) for p in pins), score=sum(pins), confidence=round(conf, 4))
-        csv_rows.append(row)
-        line = f"{names[i]:<14} {crop.shape[1]}x{crop.shape[0]}"
-        if "pins" in row:
-            line += f"  {row['pins']}  score={row['score']}  conf={row['confidence']:.2f}"
-        print(line)
+    for idx, image in enumerate(images):
+        _require(image, "Image")
+        # Per-sheet output subdirectory when multiple images
+        sheet_dir = output / image.stem if len(images) > 1 else output
+        raw_dir = sheet_dir / "raw"
+        raw_dir.mkdir(parents=True, exist_ok=True)
 
-    if csv_rows:
-        csv_path = output / "predictions.csv"
-        with open(csv_path, "w", newline="") as f:
-            csv.DictWriter(f, fieldnames=list(csv_rows[0].keys())).writeheader()
-            csv.DictWriter(f, fieldnames=list(csv_rows[0].keys())).writerows(csv_rows)
-        print(f"\nSaved to {csv_path}")
+        if idx > 0:
+            print()
+        if len(images) > 1:
+            print(f"── {image.name} ──")
+
+        rectified, dets, crops = _detect_and_crop(image, confidence)
+        print(f"Detected {len(dets)} pin diagrams")
+
+        vis = cv2.cvtColor(rectified, cv2.COLOR_GRAY2BGR)
+        cv2.imwrite(str(sheet_dir / "annotated_full.jpg"), draw_detections(vis, dets))
+
+        names = [f"c{d.column:02d}_r{d.row:02d}" for d in dets]
+        for name, crop in zip(names, crops):
+            cv2.imwrite(str(raw_dir / f"{name}.png"), crop)
+
+        classifications = []
+        if cnn is not None:
+            classifications = classify_pins_batch(cnn, crops, device=dev)
+
+        csv_rows: list[dict] = []
+        for i, (det, crop) in enumerate(zip(dets, crops)):
+            row: dict = {"name": names[i], "column": det.column, "row": det.row}
+            if i < len(classifications):
+                pins, conf = classifications[i]
+                row.update(pins="".join(str(p) for p in pins), score=sum(pins), confidence=round(conf, 4))
+            csv_rows.append(row)
+            line = f"{names[i]:<14} {crop.shape[1]}x{crop.shape[0]}"
+            if "pins" in row:
+                line += f"  {row['pins']}  score={row['score']}  conf={row['confidence']:.2f}"
+            print(line)
+
+        if csv_rows:
+            csv_path = sheet_dir / "predictions.csv"
+            with open(csv_path, "w", newline="") as f:
+                csv.DictWriter(f, fieldnames=list(csv_rows[0].keys())).writeheader()
+                csv.DictWriter(f, fieldnames=list(csv_rows[0].keys())).writerows(csv_rows)
+            print(f"Saved to {csv_path}")
 
 
 @app.command()

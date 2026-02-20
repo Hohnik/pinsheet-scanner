@@ -37,9 +37,9 @@ scan *args:
 collect *args:
     uv run pinsheet-scanner collect {{ args }}
 
-# Extract crops from a score sheet image
-extract image *args:
-    uv run pinsheet-scanner extract {{ image }} {{ args }}
+# Extract crops from one or more score sheet images
+extract *args:
+    uv run pinsheet-scanner extract {{ args }}
 
 # Open the labeling UI to annotate ground-truth pin states
 label *args:

@@ -547,3 +547,17 @@ Changes:
 - Removed stale artifacts: `flamegraph.html`, `profile.prof`, `__pycache__/`
 - Re-collected 600 fresh crops from all 6 sheets with correct rectification
 - 54 tests passing, 100% accuracy on 600 crops
+
+---
+
+## 2026-02-20 — Fix train-detector, multi-image extract
+
+**train-detector**: YOLO resolves `path: .` in dataset.yaml relative to CWD,
+not the YAML file. Fix: removed `path` key entirely — YOLO then falls back to
+using the YAML file's parent directory automatically. Also pass `data.resolve()`
+for absolute path. Training completes successfully (mAP50=0.55 on 1 image —
+the existing models/pin_diagram.pt was trained on more data and works better).
+
+**extract**: Now accepts `IMAGES...` like scan/collect. Multiple sheets get
+per-sheet subdirectories under output/ (e.g. `output/001/`, `output/004/`).
+Justfile recipe updated to `*args` passthrough.
