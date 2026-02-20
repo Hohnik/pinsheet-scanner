@@ -34,11 +34,11 @@ scan *args:
     uv run pinsheet-scanner scan {{ args }}
 
 # Harvest high-confidence crops from sheet(s) into the training set
-collect *args:
+collect *args="sheets/*":
     uv run pinsheet-scanner collect {{ args }}
 
 # Extract crops from one or more score sheet images
-extract *args:
+extract *args="sheets/*":
     uv run pinsheet-scanner extract {{ args }}
 
 # Open the labeling UI to annotate ground-truth pin states
