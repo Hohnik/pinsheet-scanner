@@ -476,3 +476,23 @@ Sheet 004 now rectifies to 405×1600 instead of 1200×1600.
 Volle=84 ✓, Abr=24 ✓, Total=108 — matches printed totals on the sheet.
 
 All other sheets unaffected (001=335, 002=472, 003=454, 005=452, original=499).
+
+---
+
+## 2026-02-20 — Augmentation pipeline expanded (8 → 14 transforms)
+
+Added 6 new augmentation types to cover all real-world scan variations:
+
+| New | Type | Purpose |
+|-----|------|---------|
+| ✅ | Shadow gradient | Uneven lighting (linear brightness falloff) |
+| ✅ | Aspect ratio jitter | Independent x/y stretch (0.85–1.15) — camera angle distortion |
+| ✅ | Perspective warp | Corner displacement (6%) — tilted camera / non-flat paper |
+| ✅ | Motion blur | Directional kernel (3–7px) — camera shake |
+| ✅ | JPEG artifacts | Encode/decode at quality 40–85 — recompression noise |
+| ✅ | Shadow gradient | Multi-direction brightness gradient — uneven scanner lighting |
+
+Existing: brightness, gamma, noise, Gaussian blur, rotation, scale, grid lines, cutout.
+
+TTA config updated to disable all training-only augmentations at inference.
+All 54 tests passing.

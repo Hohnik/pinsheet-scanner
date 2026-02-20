@@ -31,7 +31,9 @@ class TestAugment:
         cfg = AugmentConfig(brightness_range=(0, 0), noise_sigma_range=(0, 0),
                             blur_kernels=(), max_rotation_deg=0, scale_range=(1, 1),
                             grid_line_probability=0, gamma_range=(1.0, 1.0),
-                            cutout_probability=0.0)
+                            cutout_probability=0.0, shadow_probability=0.0,
+                            aspect_jitter=(1.0, 1.0), perspective_strength=0.0,
+                            motion_blur_probability=0.0, jpeg_probability=0.0)
         np.testing.assert_array_equal(_img(), augment(_img(), np.random.default_rng(0), cfg))
 
     def test_reproducible_with_same_seed(self):
