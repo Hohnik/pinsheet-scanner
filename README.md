@@ -22,8 +22,6 @@ Extract 9-pin bowling (Kegeln) scores from scanned score sheets using computer v
       0           (front)
 ```
 
-Index 0 is the front pin; numbering increases toward the back, left-to-right.
-
 ## Installation
 
 Requires Python 3.13+ and [uv](https://docs.astral.sh/uv/).

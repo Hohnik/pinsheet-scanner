@@ -380,3 +380,29 @@ Brought all docs and metadata up to date for a tagged release.
 - **justfile**: added `profile` recipe, fixed `lint` to use `uv run` prefix
 - **todo.md**: consolidated Done list, updated Active items
 - Tagged `v0.2.0`
+
+---
+
+## 2026-02-19 — Fix OCR cross-validation (60 → 4 false mismatches)
+
+**Root cause 1: batch stacking broke line-to-ROI mapping.**
+`_batch_ocr` stacked all 90 ROIs into one image. When tesseract couldn't read
+a ROI, it silently skipped it — no blank line, just omitted. All subsequent
+line-to-ROI mappings shifted, producing garbage: 76/90 batch results differed
+from individual OCR, 60/90 flagged as CNN "mismatches" (all false).
+
+**Root cause 2: PSM 10 misread annotation marks.**
+Score sheets use "1:" notation (digit + colon for Fehlwurf markers). PSM 10
+(single-character mode) tried to interpret "1:" as one glyph → read as "4".
+
+**Root cause 3: ROI too wide.**
+`det.x_min - width * 1.5` captured annotation colons from adjacent columns.
+
+**Fixes:**
+- Dropped batch OCR entirely — parallel individual calls via ThreadPoolExecutor
+  (same 1.6s overhead, now correct)
+- PSM 10 → PSM 7 (single line) — handles "1:" correctly, reads "1"
+- ROI width tightened: `1.5` → `0.9` multiplier, `0.1` → `0.05` gap
+
+**Result:** 82/90 correct matches, 4 unreadable, 4 false mismatches (tesseract
+misreads of small handwritten digits). Was 60 false mismatches before.
