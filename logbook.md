@@ -366,3 +366,17 @@ Replaced with `pyinstrument` which generates an **interactive HTML flame graph**
 Profiling script updated to produce both cProfile `.prof` and pyinstrument HTML.
 
 All 54 tests pass.
+
+---
+
+## 2026-02-19 — v0.2.0 release
+
+Brought all docs and metadata up to date for a tagged release.
+
+- **README.md** rewritten: accurate architecture description (3-layer backbone,
+  64 channels, 16×16 patches, global context, ~60K params), all CLI flags
+  (`--ocr`, `--overwrite`, `--manual-only`), performance table, dataset stats
+- **pyproject.toml**: version 0.1.0 → 0.2.0, removed stale `flameprof` dep
+- **justfile**: added `profile` recipe, fixed `lint` to use `uv run` prefix
+- **todo.md**: consolidated Done list, updated Active items
+- Tagged `v0.2.0`

@@ -1,6 +1,6 @@
 [project]
 name = "pinsheet-scanner"
-version = "0.1.0"
+version = "0.2.0"
 description = "Extract 9-pin bowling (Kegeln) scores from scanned score sheets using YOLO for detection and a CNN classifier for pin state classification."
 readme = "README.md"
 authors = [
@@ -47,6 +47,5 @@ markers = [
 
 [dependency-groups]
 dev = [
-    "flameprof>=0.4",
     "pyinstrument>=5.1.2",
 ]

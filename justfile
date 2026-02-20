@@ -15,7 +15,7 @@ integration:
 
 # Lint and format with ruff
 lint:
-    ruff check . --fix && ruff format .
+    uv run ruff check . --fix && uv run ruff format .
 
 # K-fold cross-validate then retrain the CNN classifier
 train *args:
@@ -48,3 +48,7 @@ label *args:
 # Compare ground-truth labels against CNN predictions
 accuracy *args:
     uv run pinsheet-scanner accuracy {{ args }}
+
+# Profile the scan pipeline (cProfile + pyinstrument flame graph)
+profile:
+    uv run python scripts/profile_scan.py

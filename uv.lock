@@ -212,12 +212,6 @@ wheels = [
 ]
 
 [[package]]
-name = "flameprof"
-version = "0.4"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/c0/e7/114f6710d31854b694598f577f9eac49d7f38b7fb8a55e86e2d3f848fd1c/flameprof-0.4.tar.gz", hash = "sha256:dbc86d4190cbbba624f1e0a40f44d9db96138e27534d83c8ef42d420857875a3", size = 7865, upload-time = "2018-12-25T09:28:48.554Z" }
-
-[[package]]
 name = "fonttools"
 version = "4.61.1"
 source = { registry = "https://pypi.org/simple" }
@@ -818,7 +812,7 @@ wheels = [
 
 [[package]]
 name = "pinsheet-scanner"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "numpy" },
@@ -841,7 +835,6 @@ ocr = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "flameprof" },
     { name = "pyinstrument" },
 ]
 
@@ -861,10 +854,7 @@ requires-dist = [
 provides-extras = ["dev", "ocr"]
 
 [package.metadata.requires-dev]
-dev = [
-    { name = "flameprof", specifier = ">=0.4" },
-    { name = "pyinstrument", specifier = ">=5.1.2" },
-]
+dev = [{ name = "pyinstrument", specifier = ">=5.1.2" }]
 
 [[package]]
 name = "pluggy"
