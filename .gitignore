@@ -1,15 +1,17 @@
+# Training data (crops are regenerated via `just collect`)
+data/classifier/crops/
+data/detector/train/labels.cache
+data/detector/val/labels.cache
+
 # Model weights & YOLO artifacts
 runs/
-datasets/
 *.pt
 *.onnx
 *.torchscript
 *.engine
-*.cache
 
-# YOLO data (images committed selectively)
-data/images/
-data/labels/
+# Extract / debug output
+output/
 
 # Python bytecode
 __pycache__/
@@ -54,13 +56,7 @@ coverage.xml
 .idea/
 .vscode/
 
-# Project-specific
-.worktrees/
-debug_crops/annotated_full.jpg
-debug_crops/predictions.csv
-data/classifier/
-
-# Profiling output (generated, not version-controlled)
+# Profiling output
 *.prof
 flamegraph.svg
 flamegraph.html

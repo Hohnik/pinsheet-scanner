@@ -1,6 +1,0 @@
-path: /Users/niklashohn/coding/pinsheet-scanner/data
-train: train/images
-val: val/images
-
-names:
-  0: pin_diagram

@@ -512,3 +512,38 @@ training — this teaches noise rather than signal. Removed entirely from
 
 Justfile recipes updated to `*args` passthrough.
 54 tests passing.
+
+---
+
+## 2026-02-20 — Project restructure: clean directory layout
+
+Reorganised training data and removed stale artifacts:
+
+**Before:**
+```
+debug_crops/raw/   ← CNN crops (720 files tracked in git, many from distorted extraction)
+debug_crops/labels.csv
+data/train/        ← YOLO data (1 example image)
+data/val/
+data/dataset.yaml  ← hardcoded absolute path
+```
+
+**After:**
+```
+data/
+  classifier/crops/      ← CNN training crops (gitignored, regenerated via collect)
+  classifier/labels.csv  ← ground truth labels (tracked)
+  detector/              ← YOLO dataset (yaml + train/val splits)
+sheets/                  ← input photos
+models/                  ← trained weights
+```
+
+Changes:
+- Removed all 720 `debug_crops/` files from git tracking
+- Moved YOLO data under `data/detector/`, fixed dataset.yaml to use relative path
+- Updated all CLI defaults (`debug_crops/raw` → `data/classifier/crops`)
+- `extract` defaults to `output/` (not training data dir)
+- Cleaned `.gitignore`: crops gitignored (regenerable), labels tracked (manual work)
+- Removed stale artifacts: `flamegraph.html`, `profile.prof`, `__pycache__/`
+- Re-collected 600 fresh crops from all 6 sheets with correct rectification
+- 54 tests passing, 100% accuracy on 600 crops

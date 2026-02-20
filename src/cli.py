@@ -93,8 +93,8 @@ def scan(
 @app.command()
 def collect(
     images: Annotated[list[Path], typer.Argument(help="Sheet image(s) to harvest crops from.")],
-    crops: CropsOpt = Path("debug_crops/raw"),
-    labels: LabelsOpt = Path("debug_crops/labels.csv"),
+    crops: CropsOpt = Path("data/classifier/crops"),
+    labels: LabelsOpt = Path("data/classifier/labels.csv"),
     confidence_threshold: Annotated[float, typer.Option(
         help="Minimum CNN confidence to auto-accept a prediction.")] = 0.85,
     confidence: Annotated[float, typer.Option(help="YOLO detection confidence.")] = 0.25,
@@ -175,8 +175,8 @@ def collect(
 
 @app.command()
 def train(
-    crops: CropsOpt = Path("debug_crops/raw"),
-    labels: LabelsOpt = Path("debug_crops/labels.csv"),
+    crops: CropsOpt = Path("data/classifier/crops"),
+    labels: LabelsOpt = Path("data/classifier/labels.csv"),
     output: Annotated[Path, typer.Option(help="Output weights path.")] = Path("models/pin_classifier.pt"),
     folds: Annotated[int, typer.Option(help="Cross-validation folds.")] = 5,
     epochs: Annotated[int, typer.Option(help="Training epochs per fold.")] = 200,
@@ -239,7 +239,7 @@ def train(
 
 @app.command("train-detector")
 def train_detector(
-    data: Annotated[Path, typer.Option(help="YOLO dataset YAML.")] = Path("data/dataset.yaml"),
+    data: Annotated[Path, typer.Option(help="YOLO dataset YAML.")] = Path("data/detector/dataset.yaml"),
     model: Annotated[str, typer.Option(help="Pretrained base model.")] = "yolo11n.pt",
     epochs: Annotated[int, typer.Option(help="Training epochs.")] = 50,
     imgsz: Annotated[int, typer.Option(help="Training image size.")] = 640,
@@ -265,8 +265,8 @@ def train_detector(
 
 @app.command()
 def tune(
-    crops: CropsOpt = Path("debug_crops/raw"),
-    labels: LabelsOpt = Path("debug_crops/labels.csv"),
+    crops: CropsOpt = Path("data/classifier/crops"),
+    labels: LabelsOpt = Path("data/classifier/labels.csv"),
     trials: Annotated[int, typer.Option(help="Number of Optuna trials.")] = 20,
     epochs: Annotated[int, typer.Option(help="Epochs per trial (short — for ranking only).")] = 20,
 ) -> None:
@@ -352,7 +352,7 @@ def _detect_and_crop(image_path: Path, confidence: float = 0.25):
 @app.command()
 def extract(
     image: Annotated[Path, typer.Argument(help="Path to the scanned score sheet.")],
-    output: Annotated[Path, typer.Option(help="Output directory.")] = Path("debug_crops"),
+    output: Annotated[Path, typer.Option(help="Output directory.")] = Path("output"),
     confidence: Annotated[float, typer.Option(help="Detection confidence.")] = 0.25,
 ) -> None:
     """Extract and classify pin-diagram crops from a sheet."""
@@ -403,7 +403,7 @@ def extract(
 
 
 @app.command()
-def label(crops: CropsOpt = Path("debug_crops/raw")) -> None:
+def label(crops: CropsOpt = Path("data/classifier/crops")) -> None:
     """Open browser labeling UI.
 
     Crops are sorted so the most likely errors appear first:
@@ -517,8 +517,8 @@ def label(crops: CropsOpt = Path("debug_crops/raw")) -> None:
 
 @app.command()
 def accuracy(
-    crops: CropsOpt = Path("debug_crops/raw"),
-    labels: LabelsOpt = Path("debug_crops/labels.csv"),
+    crops: CropsOpt = Path("data/classifier/crops"),
+    labels: LabelsOpt = Path("data/classifier/labels.csv"),
     classifier: Annotated[Optional[Path], typer.Option(help="CNN weights (.pt).")] = None,
     manual_only: Annotated[bool, typer.Option("--manual-only",
         help="Evaluate only manually labeled crops (prefix = 'original_').")] = False,
