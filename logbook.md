@@ -210,3 +210,47 @@ classical only when YOLO model is missing or returns nothing.
 
 Added per-Bahn summary to scan output.
 All 54 tests pass.
+
+---
+
+## 2026-02-19 — Labeler redesign + code audit
+
+### Labeler UI — complete redesign (`src/labeler.html`)
+
+Rewrote the labeler from scratch based on user feedback.
+
+**What changed:**
+- **Pin overlay on the crop image** — clickable dots are now overlaid directly
+  on the image at exact pin positions (derived from `model.py PIN_COORDS / 64`).
+  No more separate pin grid below the image. Clicking a dot toggles that pin.
+- **Save-on-navigate** — both `→` and `←` now save the current state before
+  moving. Previously only "Save & Next" saved; arrow keys are now the primary
+  labeling action with zero extra interaction.
+- **Progress counter** — `47 / 593 · 234 labeled` in the top bar next to the filename.
+- **Live speed timer** — `2.3 /s` updated every 500 ms. Starts on first save
+  so initial browsing doesn't skew the rate.
+- **Removed** — separate pin grid div, key hints on each dot, pin number labels,
+  the "Save & Next" button (navigation IS saving now).
+
+### Code audit — findings and fixes
+
+**Fixed immediately:**
+
+1. **TTA cutout and gamma active at inference** (`classify.py`)
+   `_TTA_CFG` inherited `cutout_probability=0.3` and `gamma_range=(0.6, 1.8)`
+   from `AugmentConfig` defaults. Cutout erases random patches; gamma shifts
+   contrast — neither should run at test time. Both now explicitly `0 / (1.0, 1.0)`.
+
+2. **Final-retrain tqdm shows `acc=0.0%` always** (`training.py`)
+   With no val set the displayed accuracy was hardcoded to 0. Now training
+   accuracy is computed from the same forward-pass logits (zero extra cost)
+   and shown live in the bar. Test updated accordingly.
+
+**Documented for later (see `todo.md`):**
+- `collect` silently skips re-labeling when the model improves → need `--overwrite`
+- YOLO min-detection guard missing: 2 YOLO boxes won't trigger classical fallback
+- `accuracy` 100% is inflated by pseudo-labels → need `--manual-only`
+- Model weights overwritten with no backup on every `train` run
+- `hyperparams.json` has no provenance (date, sample count, arch size)
+
+All 54 tests pass.

@@ -67,4 +67,5 @@ class TestTrainNewModel:
         d, e = tiny_dataset
         model, loss, acc = train_new_model(e, d, 2, torch.device("cpu"), 0,
                                            lr=1e-3, weight_decay=0, dropout=0.3, batch_size=4)
-        assert loss >= 0 and acc == 0.0
+        # Without a val set the loop returns training accuracy (not 0).
+        assert loss >= 0 and 0.0 <= acc <= 1.0

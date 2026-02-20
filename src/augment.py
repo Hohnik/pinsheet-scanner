@@ -1,12 +1,12 @@
 """Image augmentation for pin diagram training data.
 
 Applies scan-artifact effects (noise, blur, rotation, brightness jitter,
-grid-line remnants) to crops during training.
+gamma, cutout, grid-line remnants) to crops during training.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import cv2
 import numpy as np
@@ -24,6 +24,9 @@ class AugmentConfig:
     scale_range: tuple[float, float] = (0.9, 1.1)
     grid_line_probability: float = 0.6
     grid_intensity_range: tuple[int, int] = (100, 170)
+    gamma_range: tuple[float, float] = (0.6, 1.8)
+    cutout_probability: float = 0.3
+    cutout_max_size: int = 12
 
 
 DEFAULT_CONFIG = AugmentConfig()
@@ -49,6 +52,16 @@ def _apply_brightness(img: np.ndarray, rng: np.random.Generator, cfg: AugmentCon
     if lo == 0 and hi == 0:
         return img
     return np.clip(img.astype(np.int16) + int(rng.integers(lo, hi + 1)), 0, 255).astype(np.uint8)
+
+
+def _apply_gamma(img: np.ndarray, rng: np.random.Generator, cfg: AugmentConfig) -> np.ndarray:
+    """Power-law contrast shift — simulates different scanner exposure settings."""
+    lo, hi = cfg.gamma_range
+    if lo == 1.0 and hi == 1.0:
+        return img
+    gamma = rng.uniform(lo, hi)
+    table = (np.arange(256) / 255.0) ** gamma * 255.0
+    return table.astype(np.uint8)[img]
 
 
 def _apply_noise(img: np.ndarray, rng: np.random.Generator, cfg: AugmentConfig) -> np.ndarray:
@@ -85,9 +98,22 @@ def _apply_scale_jitter(img: np.ndarray, rng: np.random.Generator, cfg: AugmentC
     return cv2.resize(cv2.resize(img, (nw, nh), interpolation=cv2.INTER_AREA), (w, h), interpolation=cv2.INTER_AREA)
 
 
+def _apply_cutout(img: np.ndarray, rng: np.random.Generator, cfg: AugmentConfig) -> np.ndarray:
+    """Erase a random rectangle — simulates smudges and partial occlusion."""
+    if cfg.cutout_max_size <= 0 or rng.random() >= cfg.cutout_probability:
+        return img
+    h, w = img.shape[:2]
+    sz = int(rng.integers(cfg.cutout_max_size // 2, cfg.cutout_max_size + 1))
+    x = int(rng.integers(0, max(1, w - sz)))
+    y = int(rng.integers(0, max(1, h - sz)))
+    out = img.copy()
+    out[y:y + sz, x:x + sz] = int(img.mean())
+    return out
+
+
 _TRANSFORMS = [
-    _apply_grid_lines, _apply_brightness, _apply_noise,
-    _apply_blur, _apply_rotation, _apply_scale_jitter,
+    _apply_grid_lines, _apply_brightness, _apply_gamma, _apply_noise,
+    _apply_blur, _apply_rotation, _apply_scale_jitter, _apply_cutout,
 ]
 
 

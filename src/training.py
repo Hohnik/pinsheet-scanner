@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 import cv2
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader, Dataset
 
 from augment import AugmentConfig, augment
@@ -20,27 +21,35 @@ HYPERPARAMS_PATH = Path("models/hyperparams.json")
 
 DEFAULTS: dict[str, float | int] = {
     "lr": 3e-4,
-    "weight_decay": 0.0,
+    "weight_decay": 1e-4,
     "dropout": 0.3,
     "batch_size": 16,
 }
 
+LABEL_SMOOTH: float = 0.05   # prevents overconfidence on small datasets
+WARMUP_FRACTION: float = 0.1  # first 10% of epochs = linear warmup
+
 _TRAIN_AUGMENT = AugmentConfig(
-    brightness_range=(-40, 40),
-    noise_sigma_range=(3.0, 12.0),
+    brightness_range=(-50, 50),
+    noise_sigma_range=(2.0, 15.0),
     blur_kernels=(0, 0, 3, 3, 5),
     blur_sigma_range=(0.3, 1.8),
-    max_rotation_deg=6.0,
-    scale_range=(0.85, 1.15),
+    max_rotation_deg=8.0,
+    scale_range=(0.80, 1.20),
     grid_line_probability=0.4,
     grid_intensity_range=(90, 180),
+    gamma_range=(0.5, 2.0),
+    cutout_probability=0.35,
+    cutout_max_size=14,
 )
 
 
 def load_hyperparams() -> dict[str, float | int]:
     """Return training defaults, overridden by ``models/hyperparams.json``."""
     if HYPERPARAMS_PATH.exists():
-        return {**DEFAULTS, **json.loads(HYPERPARAMS_PATH.read_text())}
+        stored = json.loads(HYPERPARAMS_PATH.read_text())
+        # filter to only known keys so stale keys (e.g. "scheduler") are ignored
+        return {**DEFAULTS, **{k: v for k, v in stored.items() if k in DEFAULTS}}
     return dict(DEFAULTS)
 
 
@@ -76,6 +85,14 @@ def split_entries(
     return [entries[i] for i in idx if i not in val_set], [entries[i] for i in idx if i in val_set]
 
 
+def _cosine_warmup_lambda(epoch: int, epochs: int, warmup: int) -> float:
+    """LR multiplier: linear warmup then cosine decay to 1e-3 of peak."""
+    if epoch < warmup:
+        return (epoch + 1) / max(1, warmup)
+    progress = (epoch - warmup) / max(1, epochs - warmup)
+    return 1e-3 + (1.0 - 1e-3) * 0.5 * (1 + math.cos(math.pi * progress))
+
+
 def _train_loop(
     model: PinClassifier,
     train_loader: DataLoader,
@@ -85,26 +102,43 @@ def _train_loop(
     device: torch.device,
     lr: float,
     weight_decay: float,
+    desc: str = "",
+    leave: bool = True,
 ) -> tuple[float, float]:
     """Core loop. Restores best weights in-place. Returns ``(best_loss, best_acc)``."""
+    from tqdm import tqdm
+
     criterion = nn.BCEWithLogitsLoss()
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
-    scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
+    warmup = max(1, int(epochs * WARMUP_FRACTION))
+    scheduler = LambdaLR(optimizer, lambda e: _cosine_warmup_lambda(e, epochs, warmup))
 
     best_loss, best_acc = float("inf"), 0.0
     best_state: dict | None = None
 
-    for _ in range(epochs):
+    bar = tqdm(range(epochs), desc=desc or "Training", unit="ep",
+               leave=leave, dynamic_ncols=True) if desc else range(epochs)
+
+    for _ in bar:
         model.train()
-        epoch_loss = 0.0
+        epoch_loss = train_correct = train_total = 0.0
         for images, labels in train_loader:
             images, labels = images.to(device), labels.to(device)
-            loss = criterion(model(images), labels)
+            # Label smoothing: avoids overconfidence on small/noisy datasets
+            labels_smooth = labels * (1 - LABEL_SMOOTH) + LABEL_SMOOTH / 2
+            logits = model(images)
+            loss = criterion(logits, labels_smooth)
             optimizer.zero_grad()
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             epoch_loss += loss.item() * images.size(0)
+            # Track train accuracy without an extra forward pass.
+            with torch.no_grad():
+                train_correct += ((torch.sigmoid(logits) >= 0.5).float() == labels).sum().item()
+                train_total   += labels.numel()
         epoch_loss /= len(train_loader.dataset)  # type: ignore[arg-type]
+        epoch_train_acc = train_correct / train_total if train_total else 0.0
 
         if val_loader is not None:
             model.eval()
@@ -119,11 +153,15 @@ def _train_loop(
             val_loss /= len(val_loader.dataset)  # type: ignore[arg-type]
             metric, val_acc = val_loss, correct / total if total else 0.0
         else:
-            metric, val_acc = epoch_loss, 0.0
+            # No val set (final retrain) — use training accuracy for display.
+            metric, val_acc = epoch_loss, epoch_train_acc
 
         if metric < best_loss:
             best_loss, best_acc = metric, val_acc
             best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+
+        if desc and hasattr(bar, "set_postfix"):
+            bar.set_postfix(loss=f"{metric:.4f}", acc=f"{val_acc:.1%}")  # type: ignore[union-attr]
 
         scheduler.step()
 
@@ -144,9 +182,12 @@ def train_new_model(
     dropout: float,
     batch_size: int,
     val_entries: list[tuple[str, list[int]]] | None = None,
+    desc: str = "",
+    leave: bool = True,
 ) -> tuple[PinClassifier, float, float]:
     """Create, train, and return ``(model, best_loss, best_acc)``.
 
+    Pass ``desc`` to show a tqdm progress bar with that label.
     Best weights are restored in-place before returning.
     """
     torch.manual_seed(seed)
@@ -158,5 +199,6 @@ def train_new_model(
         val_loader = DataLoader(CropDataset(crops_dir, val_entries), batch_size=batch_size)
     model = PinClassifier(dropout=dropout).to(device)
     loss, acc = _train_loop(model, train_loader, val_loader,
-                            epochs=epochs, device=device, lr=lr, weight_decay=weight_decay)
+                            epochs=epochs, device=device, lr=lr, weight_decay=weight_decay,
+                            desc=desc, leave=leave)
     return model, loss, acc

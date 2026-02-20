@@ -12,6 +12,7 @@ dependencies = [
     "opencv-python>=4.13.0.92",
     "optuna>=4.7.0",
     "torch>=2.0.0",
+    "tqdm>=4.67.3",
     "typer>=0.23.1",
     "ultralytics>=8.3.0",
 ]

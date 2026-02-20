@@ -5,172 +5,344 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Pin Labeler</title>
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-         background: #1a1a2e; color: #e0e0e0; display: flex; flex-direction: column;
-         align-items: center; min-height: 100vh; padding: 20px; }
-  h1 { font-size: 1.3rem; margin-bottom: 8px; color: #a0a0c0; font-weight: 500; }
-  .progress { font-size: 0.85rem; color: #707090; margin-bottom: 16px; }
-  .progress-bar { width: 320px; height: 4px; background: #2a2a4a; border-radius: 2px;
-                  margin-bottom: 20px; }
-  .progress-fill { height: 100%; background: #6c63ff; border-radius: 2px; transition: width 0.3s; }
-  .card { background: #16213e; border-radius: 12px; padding: 24px; width: 360px;
-          box-shadow: 0 4px 20px rgba(0,0,0,0.3); }
-  .crop-name { text-align: center; font-size: 0.9rem; color: #8888aa; margin-bottom: 12px;
-               font-family: monospace; }
-  .crop-container { display: flex; justify-content: center; margin-bottom: 20px; }
-  .crop-container img { width: 200px; height: auto; image-rendering: pixelated;
-                        border-radius: 6px; border: 2px solid #2a2a4a; }
-  .pin-grid { position: relative; width: 220px; height: 220px; margin: 0 auto 20px; }
-  .pin { position: absolute; width: 40px; height: 40px; border-radius: 50%;
-         border: 3px solid #4a4a6a; background: transparent; cursor: pointer;
-         display: flex; align-items: center; justify-content: center;
-         font-size: 0.75rem; font-weight: 600; color: #6a6a8a;
-         transition: all 0.15s ease; transform: translate(-50%, -50%); }
-  .pin:hover { border-color: #6c63ff; transform: translate(-50%, -50%) scale(1.1); }
-  .pin.down { background: #6c63ff; border-color: #6c63ff; color: #fff; }
-  .pin .key-hint { position: absolute; bottom: -16px; font-size: 0.6rem; color: #505070; }
-  .nav { display: flex; gap: 10px; justify-content: center; margin-bottom: 12px; }
-  .nav button { padding: 8px 20px; border: none; border-radius: 6px; cursor: pointer;
-                font-size: 0.85rem; font-weight: 500; transition: background 0.15s; }
-  .btn-prev, .btn-next { background: #2a2a4a; color: #c0c0d0; }
-  .btn-prev:hover, .btn-next:hover { background: #3a3a5a; }
-  .btn-save { background: #6c63ff; color: #fff; }
-  .btn-save:hover { background: #5a52dd; }
-  .btn-prev:disabled, .btn-next:disabled { opacity: 0.3; cursor: default; }
-  .score { text-align: center; font-size: 1.1rem; color: #6c63ff; margin-bottom: 12px;
-           font-weight: 600; }
-  .conf { text-align: center; font-size: 0.75rem; color: #505070; margin-bottom: 16px; }
-  .status { text-align: center; font-size: 0.8rem; margin-top: 12px; min-height: 1.2em; }
-  .status.saved { color: #4caf50; }
-  .status.error { color: #f44336; }
-  .labeled-mark { color: #4caf50; font-size: 0.75rem; }
-  .keyboard-help { font-size: 0.7rem; color: #404060; text-align: center;
-                   margin-top: 16px; line-height: 1.6; }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: system-ui, -apple-system, sans-serif;
+    background: #0e0e0e;
+    color: #ccc;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 20px 16px;
+    gap: 10px;
+    user-select: none;
+  }
+
+  /* ── Top bar: filename  ·  position counter  ·  speed ───────────────── */
+  .topbar {
+    width: 320px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    font-size: 0.75rem;
+  }
+  .tb-name {
+    font-family: monospace;
+    color: #444;
+    max-width: 180px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .tb-name.is-labeled { color: #3c9; }
+
+  .tb-right {
+    text-align: right;
+    line-height: 1.6;
+    color: #444;
+    white-space: nowrap;
+  }
+  .tb-right .speed { color: #555; }
+
+  /* ── Progress bar ────────────────────────────────────────────────────── */
+  .progress-bar {
+    width: 320px;
+    height: 2px;
+    background: #1a1a1a;
+    border-radius: 1px;
+  }
+  .progress-fill {
+    height: 100%;
+    background: #2e6fff;
+    border-radius: 1px;
+    transition: width 0.35s ease;
+  }
+
+  /* ── Image + pin dot overlay ─────────────────────────────────────────── */
+  /*
+     The img-wrap is fixed 300×300 so percentage-based pin positions always
+     map to the same spot regardless of the underlying image load state.
+     Pin positions (PIN_FRAC) are derived from model.py PIN_COORDS / 64.
+  */
+  .img-wrap {
+    position: relative;
+    width: 300px;
+    height: 300px;
+    flex-shrink: 0;
+  }
+  .crop-img {
+    width: 300px;
+    height: 300px;
+    image-rendering: pixelated;
+    display: block;
+    border-radius: 4px;
+    border: 1px solid #1a1a1a;
+  }
+
+  /* Clickable circles overlaid at exact pin positions */
+  .pin-dot {
+    position: absolute;
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    /* centre the dot on the pin coordinate */
+    transform: translate(-50%, -50%);
+    cursor: pointer;
+    border: 2px solid rgba(255, 255, 255, 0.12);
+    background: transparent;
+    transition: background 0.08s, border-color 0.08s;
+  }
+  .pin-dot:hover { border-color: rgba(255, 255, 255, 0.35); }
+  .pin-dot.down {
+    background: rgba(46, 111, 255, 0.45);
+    border-color: rgba(100, 160, 255, 0.9);
+  }
+
+  /* ── Large score readout ─────────────────────────────────────────────── */
+  .score {
+    font-size: 2.2rem;
+    font-weight: 700;
+    color: #2e6fff;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+  }
+
+  /* ── Navigation buttons ──────────────────────────────────────────────── */
+  .nav { display: flex; gap: 8px; }
+  .nav button {
+    padding: 9px 32px;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    font-weight: 600;
+    transition: background 0.1s, opacity 0.1s;
+  }
+  .btn-prev { background: #1c1c1c; color: #555; }
+  .btn-prev:not(:disabled):hover { background: #242424; color: #999; }
+  .btn-prev:disabled { opacity: 0.2; cursor: default; }
+  .btn-next { background: #2e6fff; color: #fff; letter-spacing: 0.02em; }
+  .btn-next:hover { background: #4880ff; }
+
+  /* ── Status flash ────────────────────────────────────────────────────── */
+  .status {
+    height: 1em;
+    font-size: 0.72rem;
+    color: #3c9;
+    transition: opacity 0.4s;
+  }
+
+  /* ── Footer hint ─────────────────────────────────────────────────────── */
+  .keys { font-size: 0.6rem; color: #222; letter-spacing: 0.02em; }
 </style>
 </head>
 <body>
-<h1>Pin Labeler</h1>
-<div class="progress" id="progress-text"></div>
-<div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
-<div class="card" id="card"></div>
-<div class="keyboard-help">
-  <b>Keys:</b> 1-9 toggle pins &middot; &larr;&rarr; navigate &middot; Enter save &amp; next
+
+<!-- Stats bar -->
+<div class="topbar">
+  <span class="tb-name" id="tb-name">—</span>
+  <div class="tb-right">
+    <div id="tb-pos">— / —</div>
+    <div class="speed" id="tb-speed"></div>
+  </div>
 </div>
 
+<!-- Progress -->
+<div class="progress-bar">
+  <div class="progress-fill" id="prog"></div>
+</div>
+
+<!-- Crop image with pin overlay (dots injected by JS) -->
+<div class="img-wrap" id="img-wrap">
+  <img class="crop-img" id="crop-img" src="" alt="crop">
+</div>
+
+<!-- Pin-count score -->
+<div class="score" id="score">0</div>
+
+<!-- Navigation (both buttons save first) -->
+<div class="nav">
+  <button class="btn-prev" id="btn-prev">← Back</button>
+  <button class="btn-next" id="btn-next">Next →</button>
+</div>
+
+<div class="status" id="status"></div>
+<div class="keys">← → &nbsp;save &amp; navigate &nbsp;·&nbsp; Enter = next &nbsp;·&nbsp; click a dot to toggle pin</div>
+
 <script>
-// Injected server-side — crops are pre-sorted by ascending CNN confidence
-// (unlabeled first, lowest-confidence first) so each session targets the
-// examples the model is most uncertain about.
-const CROPS = /*CROPS_JSON*/;
+// ── Data injected server-side ─────────────────────────────────────────────
+// Crops are pre-sorted: unlabeled first (ascending CNN confidence), then labeled.
+const CROPS       = /*CROPS_JSON*/;
 const PREDICTIONS = /*PREDICTIONS_JSON*/;
-const LABELS = /*LABELS_JSON*/;
+const LABELS      = /*LABELS_JSON*/;
 
-// Start at the first unlabeled crop (front of sorted list).
-let idx = 0;
-for (let i = 0; i < CROPS.length; i++) {
-  if (!LABELS[CROPS[i]]) { idx = i; break; }
-}
-
-// Pin positions — bottom-to-top numbering (0 = front, 8 = back).
-const PIN_POS = [
-  [50, 96],  // 0 – front / bottom
-  [30, 74],  // 1 – 2nd row from bottom, left
-  [70, 74],  // 2 – 2nd row from bottom, right
-  [10, 52],  // 3 – middle row, left
-  [50, 52],  // 4 – middle row, centre
-  [90, 52],  // 5 – middle row, right
-  [30, 30],  // 6 – 2nd row from top, left
-  [70, 30],  // 7 – 2nd row from top, right
-  [50,  8],  // 8 – back / top
+// ── Pin positions ─────────────────────────────────────────────────────────
+// Derived from model.py PIN_COORDS (cx, cy) / 64  →  fraction of image size.
+// Layout (front = 0, back = 8):
+//        8
+//      6   7
+//    3   4   5
+//      1   2
+//        0
+const PIN_FRAC = [
+  [32 / 64, 56 / 64],  // 0  front
+  [20 / 64, 44 / 64],  // 1
+  [44 / 64, 44 / 64],  // 2
+  [ 8 / 64, 32 / 64],  // 3
+  [32 / 64, 32 / 64],  // 4
+  [56 / 64, 32 / 64],  // 5
+  [20 / 64, 20 / 64],  // 6
+  [44 / 64, 20 / 64],  // 7
+  [32 / 64,  8 / 64],  // 8  back
 ];
 
-let pins = [0,0,0,0,0,0,0,0,0];
+// ── Session state ─────────────────────────────────────────────────────────
+let idx = (() => {
+  for (let i = 0; i < CROPS.length; i++) {
+    if (!LABELS[CROPS[i]]) return i;
+  }
+  return 0; // all labeled → start at 0
+})();
+
+let pins         = Array(9).fill(0);
+let sessionStart = null;   // set on first save
+let sessionSaves = 0;
+let statusTimer  = null;
+
+// ── Helpers ───────────────────────────────────────────────────────────────
+
+function labeledCount() { return Object.keys(LABELS).length; }
 
 function getInitialPins(name) {
   if (LABELS[name]) return [...LABELS[name]];
-  if (PREDICTIONS[name]) return [...PREDICTIONS[name].pins];
-  return [0,0,0,0,0,0,0,0,0];
+  const p = PREDICTIONS[name];
+  return p ? [...p.pins] : Array(9).fill(0);
 }
 
-function render() {
-  const total = CROPS.length;
-  const labeled = Object.keys(LABELS).length;
-  document.getElementById("progress-text").textContent =
-    `${labeled} / ${total} labeled` + (labeled === total ? " ✓" : "");
-  document.getElementById("progress-fill").style.width =
-    `${(labeled / total * 100).toFixed(1)}%`;
+// ── Pin overlay ───────────────────────────────────────────────────────────
 
-  if (total === 0) {
-    document.getElementById("card").innerHTML = '<div style="text-align:center;padding:40px"><h2 style="color:#4caf50">No crops found</h2></div>';
-    return;
-  }
-
-  const name = CROPS[idx];
-  pins = getInitialPins(name);
-  const pred = PREDICTIONS[name];
-  const isLabeled = !!LABELS[name];
-
-  let html = `<div class="crop-name">${name} ${isLabeled ? '<span class="labeled-mark">✓</span>' : ''}</div>`;
-  html += `<div class="crop-container"><img src="/crop/${name}" alt="${name}"></div>`;
-  html += `<div class="score" id="score">Score: ${pins.reduce((a,b)=>a+b,0)}</div>`;
-  if (pred) html += `<div class="conf">CNN confidence: ${(pred.conf * 100).toFixed(0)}%</div>`;
-  html += `<div class="pin-grid">`;
+function buildPinDots() {
+  document.querySelectorAll(".pin-dot").forEach(e => e.remove());
+  const wrap = document.getElementById("img-wrap");
   for (let i = 0; i < 9; i++) {
-    const [x, y] = PIN_POS[i];
-    html += `<div class="pin ${pins[i] ? 'down' : ''}" style="left:${x}%;top:${y}%"
-                  onclick="togglePin(${i})" id="pin${i}">
-               ${i}<span class="key-hint">${i+1}</span>
-             </div>`;
+    const [fx, fy] = PIN_FRAC[i];
+    const dot = document.createElement("div");
+    dot.className = "pin-dot" + (pins[i] ? " down" : "");
+    dot.id = "p" + i;
+    // percentage positioning relative to img-wrap (300×300 px)
+    dot.style.left = (fx * 100).toFixed(3) + "%";
+    dot.style.top  = (fy * 100).toFixed(3) + "%";
+    const pi = i;
+    dot.addEventListener("click", e => { e.stopPropagation(); togglePin(pi); });
+    wrap.appendChild(dot);
   }
-  html += `</div>`;
-  html += `<div class="nav">
-    <button class="btn-prev" onclick="go(-1)" ${idx===0?'disabled':''}>← Prev</button>
-    <button class="btn-save" onclick="saveAndNext()">Save & Next</button>
-    <button class="btn-next" onclick="go(1)" ${idx>=total-1?'disabled':''}>Next →</button>
-  </div>`;
-  html += `<div class="status" id="status"></div>`;
-  document.getElementById("card").innerHTML = html;
 }
 
 function togglePin(i) {
-  pins[i] = pins[i] ? 0 : 1;
-  document.getElementById("pin" + i).classList.toggle("down", !!pins[i]);
-  document.getElementById("score").textContent = "Score: " + pins.reduce((a,b)=>a+b,0);
+  pins[i] ^= 1;
+  document.getElementById("p" + i).classList.toggle("down", !!pins[i]);
+  document.getElementById("score").textContent = pins.reduce((a, b) => a + b, 0);
 }
 
-function go(delta) {
-  const next = idx + delta;
-  if (next >= 0 && next < CROPS.length) { idx = next; render(); }
+// ── Render ────────────────────────────────────────────────────────────────
+
+function render() {
+  const name  = CROPS[idx];
+  const n     = CROPS.length;
+  const done  = labeledCount();
+  const isLabeled = !!LABELS[name];
+
+  pins = getInitialPins(name);
+
+  // Topbar
+  const tbName = document.getElementById("tb-name");
+  tbName.textContent = name + (isLabeled ? " ✓" : "");
+  tbName.className = "tb-name" + (isLabeled ? " is-labeled" : "");
+
+  document.getElementById("tb-pos").textContent =
+    `${idx + 1} / ${n}  ·  ${done} labeled`;
+
+  // Progress bar
+  document.getElementById("prog").style.width = (done / n * 100).toFixed(2) + "%";
+
+  // Image
+  document.getElementById("crop-img").src = "/crop/" + name;
+
+  // Score
+  document.getElementById("score").textContent = pins.reduce((a, b) => a + b, 0);
+
+  // Nav
+  document.getElementById("btn-prev").disabled = idx === 0;
+  document.getElementById("btn-next").disabled = idx >= n - 1;
+
+  // Pin overlay
+  buildPinDots();
 }
 
-async function saveAndNext() {
+// ── Speed ticker (runs every 500 ms) ─────────────────────────────────────
+
+setInterval(() => {
+  if (!sessionStart || sessionSaves === 0) return;
+  const s = (Date.now() - sessionStart) / 1000;
+  document.getElementById("tb-speed").textContent =
+    (sessionSaves / s).toFixed(1) + " /s";
+}, 500);
+
+// ── Save + navigate ───────────────────────────────────────────────────────
+
+async function saveAndGo(delta) {
   const name = CROPS[idx];
-  const body = JSON.stringify({ filename: name, pins: [...pins] });
+  if (!sessionStart) sessionStart = Date.now();
+
   try {
-    const resp = await fetch("/save", {
-      method: "POST", headers: {"Content-Type":"application/json"}, body
+    const r = await fetch("/save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename: name, pins: [...pins] }),
     });
-    if (!resp.ok) throw new Error(resp.statusText);
+    if (!r.ok) throw new Error(r.statusText);
     LABELS[name] = [...pins];
-    const el = document.getElementById("status");
-    el.textContent = "Saved ✓"; el.className = "status saved";
-    setTimeout(() => {
-      if (idx < CROPS.length - 1) { idx++; render(); }
-      else { render(); el.textContent = "All done!"; el.className = "status saved"; }
-    }, 250);
+    sessionSaves++;
+    flash("✓");
   } catch (e) {
-    const el = document.getElementById("status");
-    el.textContent = "Error: " + e.message; el.className = "status error";
+    flash("Error: " + e.message, true);
+    return; // don't navigate on save failure
   }
+
+  const next = idx + delta;
+  if (next >= 0 && next < CROPS.length) {
+    idx = next;
+  }
+  render();
 }
 
-document.addEventListener("keydown", (e) => {
-  if (e.key === "ArrowLeft") go(-1);
-  else if (e.key === "ArrowRight") go(1);
-  else if (e.key === "Enter") saveAndNext();
-  else if (e.key >= "1" && e.key <= "9") togglePin(parseInt(e.key) - 1);
+function flash(msg, err = false) {
+  const el = document.getElementById("status");
+  el.textContent = msg;
+  el.style.color   = err ? "#f55" : "#3c9";
+  el.style.opacity = "1";
+  clearTimeout(statusTimer);
+  statusTimer = setTimeout(() => { el.style.opacity = "0"; }, 1200);
+}
+
+// ── Keyboard ──────────────────────────────────────────────────────────────
+
+document.addEventListener("keydown", e => {
+  if (e.key === "ArrowRight" || e.key === "Enter") {
+    e.preventDefault();
+    saveAndGo(1);
+  } else if (e.key === "ArrowLeft") {
+    e.preventDefault();
+    saveAndGo(-1);
+  }
 });
+
+document.getElementById("btn-next").addEventListener("click", () => saveAndGo(1));
+document.getElementById("btn-prev").addEventListener("click", () => saveAndGo(-1));
+
+// ── Boot ──────────────────────────────────────────────────────────────────
 
 render();
 </script>

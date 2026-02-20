@@ -72,6 +72,85 @@ def scan(
     print(f"\nTotal pins knocked down: {result.total_pins}")
 
 
+@app.command()
+def collect(
+    image: Annotated[Path, typer.Argument(help="Sheet image to harvest crops from.")],
+    crops: CropsOpt = Path("debug_crops/raw"),
+    labels: LabelsOpt = Path("debug_crops/labels.csv"),
+    confidence_threshold: Annotated[float, typer.Option(
+        help="Minimum CNN confidence to auto-accept a prediction.")] = 0.85,
+    confidence: Annotated[float, typer.Option(help="YOLO detection confidence.")] = 0.25,
+) -> None:
+    """Harvest high-confidence crops from a sheet into the training set.
+
+    Runs detection + CNN on the sheet, then appends any crop where the
+    classifier confidence exceeds the threshold to labels.csv (without
+    overwriting existing entries).  Review low-confidence crops with
+    `pinsheet-scanner label` afterwards.
+    """
+    import csv
+
+    import cv2
+
+    from classify import classify_pins_batch, load_classifier
+    from pipeline import DEFAULT_CLASSIFIER_PATH
+
+    _require(image, "Image")
+    _require(DEFAULT_CLASSIFIER_PATH, "Classifier weights", "Train a model first.")
+    crops.mkdir(parents=True, exist_ok=True)
+
+    # Load existing labels so we don't duplicate
+    existing: set[str] = set()
+    existing_rows: list[dict] = []
+    if labels.exists():
+        with open(labels) as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                existing.add(row["filename"])
+                existing_rows.append(row)
+
+    rectified, dets, raw_crops = _detect_and_crop(image, confidence)
+    if not dets:
+        print("No pin diagrams detected.")
+        return
+
+    cnn, dev = load_classifier(DEFAULT_CLASSIFIER_PATH)
+    classifications = classify_pins_batch(cnn, raw_crops, device=dev)
+
+    stem = image.stem
+    added = skipped_dup = skipped_low = 0
+    new_rows: list[dict] = []
+
+    for det, crop, (pins, conf) in zip(dets, raw_crops, classifications):
+        name = f"{stem}_c{det.column:02d}_r{det.row:02d}.png"
+        if name in existing:
+            skipped_dup += 1
+            continue
+        if conf < confidence_threshold:
+            skipped_low += 1
+            continue
+        cv2.imwrite(str(crops / name), crop)
+        row = {"filename": name, **{f"p{i}": pins[i] for i in range(len(pins))}}
+        new_rows.append(row)
+        existing.add(name)
+        added += 1
+
+    if new_rows:
+        write_header = not labels.exists() or labels.stat().st_size == 0
+        with open(labels, "a", newline="") as f:
+            pin_cols = [f"p{i}" for i in range(len(new_rows[0]) - 1)]
+            writer = csv.DictWriter(f, fieldnames=["filename"] + pin_cols)
+            if write_header:
+                writer.writeheader()
+            writer.writerows(new_rows)
+
+    print(f"Sheet: {image.name}  |  {len(dets)} diagrams detected")
+    print(f"  Added:    {added}  (conf ≥ {confidence_threshold:.2f})")
+    print(f"  Skipped:  {skipped_low}  (conf < {confidence_threshold:.2f}) — review with `just label`")
+    print(f"  Ignored:  {skipped_dup}  (already in labels)")
+    print(f"\nTotal labeled: {len(existing_rows) + added}")
+
+
 # ── Training ──────────────────────────────────────────────────────────────
 
 
@@ -81,7 +160,7 @@ def train(
     labels: LabelsOpt = Path("debug_crops/labels.csv"),
     output: Annotated[Path, typer.Option(help="Output weights path.")] = Path("models/pin_classifier.pt"),
     folds: Annotated[int, typer.Option(help="Cross-validation folds.")] = 5,
-    epochs: Annotated[int, typer.Option(help="Training epochs per fold.")] = 60,
+    epochs: Annotated[int, typer.Option(help="Training epochs per fold.")] = 200,
 ) -> None:
     """K-fold cross-validate then retrain the CNN classifier."""
     import numpy as np
@@ -111,17 +190,22 @@ def train(
         val_idx = set(fold_splits[fold].tolist())
         train_e = [all_entries[i] for i in range(len(all_entries)) if i not in val_idx]
         val_e = [all_entries[i] for i in fold_splits[fold]]
-        print(f"Fold {fold + 1}/{folds}  (train={len(train_e)}, val={len(val_e)}) ", end="", flush=True)
-        _, vl, va = train_new_model(train_e, crops, epochs, dev, SEED + fold, val_entries=val_e, **hp)
+        _, vl, va = train_new_model(
+            train_e, crops, epochs, dev, SEED + fold, val_entries=val_e,
+            desc=f"Fold {fold + 1}/{folds}  (train={len(train_e)}, val={len(val_e)})",
+            **hp,
+        )
         losses.append(vl)
         accs.append(va)
-        print(f"→ loss={vl:.4f}  acc={va:.2%}")
+        from tqdm import tqdm as _tqdm
+        _tqdm.write(f"  ↳ loss={vl:.4f}  acc={va:.2%}")
 
     mean_acc, std_acc = float(np.mean(accs)), float(np.std(accs))
     print(f"\nMean: loss={np.mean(losses):.4f}  acc={mean_acc:.2%} ±{std_acc:.2%}")
 
     print(f"\nRetraining on all {len(all_entries)} images...")
-    model, loss, _ = train_new_model(all_entries, crops, epochs, dev, SEED, **hp)
+    model, loss, _ = train_new_model(all_entries, crops, epochs, dev, SEED,
+                                     desc="Final retrain", **hp)
     output.parent.mkdir(parents=True, exist_ok=True)
     torch.save(model.state_dict(), output)
     print(f"Final loss: {loss:.4f}  →  {output.resolve()}")
@@ -158,7 +242,7 @@ def tune(
     crops: CropsOpt = Path("debug_crops/raw"),
     labels: LabelsOpt = Path("debug_crops/labels.csv"),
     trials: Annotated[int, typer.Option(help="Number of Optuna trials.")] = 20,
-    epochs: Annotated[int, typer.Option(help="Epochs per trial.")] = 40,
+    epochs: Annotated[int, typer.Option(help="Epochs per trial (short — for ranking only).")] = 20,
 ) -> None:
     """Hyperparameter search with Optuna."""
     import optuna
@@ -176,25 +260,32 @@ def tune(
 
     train_entries, val_entries = split_entries(all_entries, 0.2, SEED)
     dev = resolve_device(None)
-    print(f"Train: {len(train_entries)}  |  Val: {len(val_entries)}  |  {trials} trials\n")
+
+    from tqdm import tqdm as _tqdm
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    trial_bar = _tqdm(total=trials, desc="Tuning", unit="trial", dynamic_ncols=True)
 
     def objective(trial: optuna.Trial) -> float:
         hp = dict(
-            lr=trial.suggest_float("lr", 1e-4, 3e-3, log=True),
-            weight_decay=trial.suggest_float("weight_decay", 1e-5, 1e-3, log=True),
+            lr=trial.suggest_float("lr", 5e-5, 5e-3, log=True),
+            weight_decay=trial.suggest_float("weight_decay", 1e-6, 1e-2, log=True),
             dropout=trial.suggest_float("dropout", 0.1, 0.5),
             batch_size=trial.suggest_categorical("batch_size", [8, 16, 32]),
         )
         _, vl, va = train_new_model(train_entries, crops, epochs, dev, SEED,
-                                    val_entries=val_entries, **hp)
+                                    val_entries=val_entries,
+                                    desc=f"  T{trial.number + 1}/{trials}", leave=False, **hp)
         trial.set_user_attr("val_acc", va)
+        trial_bar.update(1)
+        trial_bar.set_postfix(loss=f"{vl:.4f}", acc=f"{va:.1%}")
         return vl
 
     study = optuna.create_study(direction="minimize", sampler=optuna.samplers.TPESampler(seed=SEED))
-    study.optimize(objective, n_trials=trials)
+    study.optimize(objective, n_trials=trials, show_progress_bar=False)
+    trial_bar.close()
 
     best = study.best_trial
-    print(f"\nBest: loss={best.value:.4f}  acc={best.user_attrs['val_acc']:.2%}")
+    print(f"\nBest trial #{best.number + 1}: loss={best.value:.4f}  acc={best.user_attrs['val_acc']:.2%}")
     for k, v in best.params.items():
         print(f"  {k}: {v}")
 

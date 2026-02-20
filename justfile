@@ -33,6 +33,10 @@ train-detector *args:
 scan image *args:
     uv run pinsheet-scanner scan {{ image }} {{ args }}
 
+# Harvest high-confidence crops from a sheet into the training set
+collect image *args:
+    uv run pinsheet-scanner collect {{ image }} {{ args }}
+
 # Extract crops from a score sheet image
 extract image *args:
     uv run pinsheet-scanner extract {{ image }} {{ args }}

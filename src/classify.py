@@ -25,6 +25,9 @@ _TTA_CFG = AugmentConfig(
     max_rotation_deg=3.0,
     scale_range=(0.95, 1.05),
     grid_line_probability=0.0,
+    # Cutout and gamma are training-only — disabled at inference time.
+    cutout_probability=0.0,
+    gamma_range=(1.0, 1.0),
 )
 
 
