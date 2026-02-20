@@ -5,13 +5,12 @@
 (none)
 
 ## Deferred
-
-- [ ] Sheet 004 support — different pin diagram style (dashes), needs YOLO retraining
 - [ ] OCR mismatches could trigger automatic re-labeling suggestions
 - [ ] Integration tests (8 skipped, require model weights on disk)
 
 ## Done
 
+- [x] **Sheet 004 fixed** — aspect-ratio-preserving rectification. 30/30 detected, 108 total ✓
 - [x] **002 regression fixed** — retrained model predicts 472 ✓ (was 474).
       Model generalised past 2 noisy pseudo-labels without manual correction.
       OCR cross-validation confirms: C6R0 and C7R0 flags gone.

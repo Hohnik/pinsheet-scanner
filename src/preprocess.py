@@ -5,7 +5,6 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-RECTIFIED_WIDTH: int = 1200
 RECTIFIED_HEIGHT: int = 1600
 
 
@@ -42,13 +41,13 @@ def find_sheet_quad(gray: np.ndarray) -> np.ndarray | None:
 def rectify_sheet(
     image: np.ndarray,
     *,
-    width: int = RECTIFIED_WIDTH,
     height: int = RECTIFIED_HEIGHT,
 ) -> np.ndarray:
     """Perspective-correct and CLAHE-normalise a raw sheet photo.
 
-    Returns grayscale ``uint8`` of shape ``(height, width)``.
-    Falls back to CLAHE-only if no quad is found.
+    The output height is fixed at *height* pixels; the width is derived
+    from the detected quad's aspect ratio so that pin diagrams are never
+    stretched.  Falls back to CLAHE-only if no quad is found.
     """
     gray = _to_gray(image)
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
@@ -56,6 +55,12 @@ def rectify_sheet(
     quad = find_sheet_quad(gray)
     if quad is None:
         return clahe.apply(gray)
+
+    # Derive output width from the quad's physical aspect ratio.
+    tl, tr, br, bl = quad
+    avg_w = (float(np.linalg.norm(tr - tl)) + float(np.linalg.norm(br - bl))) / 2
+    avg_h = (float(np.linalg.norm(bl - tl)) + float(np.linalg.norm(br - tr))) / 2
+    width = max(1, int(height * avg_w / max(avg_h, 1)))
 
     dst = np.array([[0, 0], [width, 0], [width, height], [0, height]], dtype=np.float32)
     warped = cv2.warpPerspective(

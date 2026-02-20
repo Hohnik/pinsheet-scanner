@@ -457,3 +457,22 @@ All 5 sheets now match printed GESAMTERGEBNIS:
 001=335 ✓, 002=472 ✓, 003=454 ✓, 005=452 ✓, original=499 ✓
 
 CV results: mean acc 99.96% ±0.05%, all folds ≥99.91%.
+
+---
+
+## 2026-02-20 — Fix sheet 004: preserve aspect ratio in rectification
+
+**Root cause**: `rectify_sheet` always warped to a fixed 1200×1600 target,
+regardless of the detected quad's aspect ratio. Sheet 004 has only 1 Bahn
+(2 columns), so the quad is very narrow (aspect 0.25 vs 0.75 for 3-4 Bahn
+sheets). Forcing to 1200 wide stretched it ~3×, turning round pin dots into
+horizontal dashes. YOLO couldn't recognise the distorted shapes (0 detections).
+
+**Fix**: derive output width from the quad's physical aspect ratio.
+Height stays fixed at 1600px, width = `height × (quad_w / quad_h)`.
+Sheet 004 now rectifies to 405×1600 instead of 1200×1600.
+
+**Result**: YOLO finds all 30 pin diagrams. CNN classifies them correctly:
+Volle=84 ✓, Abr=24 ✓, Total=108 — matches printed totals on the sheet.
+
+All other sheets unaffected (001=335, 002=472, 003=454, 005=452, original=499).
