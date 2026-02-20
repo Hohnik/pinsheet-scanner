@@ -436,3 +436,24 @@ Results across all sheets:
 The 2 true flags on 002 are C6R0 (ocr=3 cnn=4) and C7R0 (ocr=6 cnn=7) —
 exactly the 2 known CNN errors from wrong pseudo-labels (pin 8).
 OCR correctly identifies real classification errors.
+
+---
+
+## 2026-02-20 — 002 regression fixed, 100% accuracy across all sheets
+
+Retrained with `just train` (200 epochs, 5-fold CV). The model generalised
+past the 2 noisy pseudo-labels (`002_c06_r00`, `002_c07_r00`) without any
+manual label correction — label smoothing (0.05) likely helped prevent
+overfitting to the wrong labels.
+
+| Metric | Before | After |
+|--------|--------|-------|
+| Sheet 002 total | 474 ❌ | **472** ✓ |
+| Overall accuracy | 591/593 (99.7%) | **593/593 (100%)** |
+| Manual-only accuracy | 117/117 (100%) | 117/117 (100%) |
+| OCR flags on 002 | 4 (2 true + 2 false) | **2** (0 true + 2 false) |
+
+All 5 sheets now match printed GESAMTERGEBNIS:
+001=335 ✓, 002=472 ✓, 003=454 ✓, 005=452 ✓, original=499 ✓
+
+CV results: mean acc 99.96% ±0.05%, all folds ≥99.91%.
