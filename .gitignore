@@ -59,3 +59,8 @@ coverage.xml
 debug_crops/annotated_full.jpg
 debug_crops/predictions.csv
 data/classifier/
+
+# Profiling output (generated, not version-controlled)
+*.prof
+flamegraph.svg
+*.bak.pt

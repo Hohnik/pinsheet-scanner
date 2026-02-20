@@ -98,8 +98,11 @@ def classify_pins_batch(
         acc = probs if acc is None else acc + probs
 
     avg = acc / TTA_PASSES  # type: ignore[operator]
-    conf = (avg - 0.5).abs().mean(dim=1) * 2.0
+    # Move the entire result to CPU in two bulk transfers instead of one
+    # per-item transfer (which adds 90+ round-trips on MPS/CUDA).
+    avg_cpu  = avg.cpu()                                        # B×9
+    conf_cpu = ((avg - 0.5).abs().mean(dim=1) * 2.0).cpu()     # B
     return [
-        ((avg[i] >= threshold).int().cpu().tolist(), float(conf[i]))
-        for i in range(avg.size(0))
+        ((avg_cpu[i] >= threshold).int().tolist(), float(conf_cpu[i]))
+        for i in range(avg_cpu.size(0))
     ]

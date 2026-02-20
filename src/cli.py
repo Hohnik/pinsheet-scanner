@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Optional
 
@@ -38,11 +40,20 @@ def scan(
     image: Annotated[Path, typer.Argument(help="Path to the scanned score sheet.")],
     classifier: Annotated[Optional[Path], typer.Option(help="CNN weights (.pt).")] = None,
     confidence: Annotated[float, typer.Option(help="YOLO confidence threshold.")] = 0.25,
+    ocr: Annotated[bool, typer.Option("--ocr/--no-ocr",
+        help="Cross-validate CNN scores with Tesseract OCR (~5 s extra).")] = False,
 ) -> None:
-    """Scan a score sheet and print per-throw results."""
+    """Scan a score sheet and print per-throw results.
+
+    OCR is disabled by default (saves ~5 s/sheet).  Enable with --ocr to add
+    ⚠ markers where the CNN score disagrees with the printed digit.
+    """
     from pipeline import process_sheet
 
-    result = process_sheet(image_path=image, classifier_path=classifier, confidence=confidence)
+    result = process_sheet(
+        image_path=image, classifier_path=classifier,
+        confidence=confidence, use_ocr=ocr,
+    )
     n = len(result.throws)
     print(f"Detected {n} throws across {result.columns} columns\n")
 
@@ -80,34 +91,28 @@ def collect(
     confidence_threshold: Annotated[float, typer.Option(
         help="Minimum CNN confidence to auto-accept a prediction.")] = 0.85,
     confidence: Annotated[float, typer.Option(help="YOLO detection confidence.")] = 0.25,
+    overwrite: Annotated[bool, typer.Option("--overwrite",
+        help="Replace existing pseudo-labels with fresh predictions.")] = False,
 ) -> None:
     """Harvest high-confidence crops from a sheet into the training set.
 
-    Runs detection + CNN on the sheet, then appends any crop where the
-    classifier confidence exceeds the threshold to labels.csv (without
-    overwriting existing entries).  Review low-confidence crops with
-    `pinsheet-scanner label` afterwards.
+    Runs detection + CNN on the sheet, then upserts any crop where the
+    classifier confidence exceeds --confidence-threshold into labels.csv.
+    Use --overwrite to refresh existing pseudo-labels after retraining.
+    Review low-confidence crops with `pinsheet-scanner label` afterwards.
     """
-    import csv
-
     import cv2
 
     from classify import classify_pins_batch, load_classifier
+    from labels import load_labels_as_dict, save_labels
     from pipeline import DEFAULT_CLASSIFIER_PATH
 
     _require(image, "Image")
     _require(DEFAULT_CLASSIFIER_PATH, "Classifier weights", "Train a model first.")
     crops.mkdir(parents=True, exist_ok=True)
 
-    # Load existing labels so we don't duplicate
-    existing: set[str] = set()
-    existing_rows: list[dict] = []
-    if labels.exists():
-        with open(labels) as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                existing.add(row["filename"])
-                existing_rows.append(row)
+    existing = load_labels_as_dict(labels)
+    n_before = len(existing)
 
     rectified, dets, raw_crops = _detect_and_crop(image, confidence)
     if not dets:
@@ -118,37 +123,33 @@ def collect(
     classifications = classify_pins_batch(cnn, raw_crops, device=dev)
 
     stem = image.stem
-    added = skipped_dup = skipped_low = 0
-    new_rows: list[dict] = []
+    added = updated = skipped_low = 0
 
     for det, crop, (pins, conf) in zip(dets, raw_crops, classifications):
         name = f"{stem}_c{det.column:02d}_r{det.row:02d}.png"
-        if name in existing:
-            skipped_dup += 1
-            continue
+        already_labeled = name in existing
         if conf < confidence_threshold:
             skipped_low += 1
             continue
+        if already_labeled and not overwrite:
+            continue
         cv2.imwrite(str(crops / name), crop)
-        row = {"filename": name, **{f"p{i}": pins[i] for i in range(len(pins))}}
-        new_rows.append(row)
-        existing.add(name)
-        added += 1
+        if already_labeled:
+            existing[name] = pins
+            updated += 1
+        else:
+            existing[name] = pins
+            added += 1
 
-    if new_rows:
-        write_header = not labels.exists() or labels.stat().st_size == 0
-        with open(labels, "a", newline="") as f:
-            pin_cols = [f"p{i}" for i in range(len(new_rows[0]) - 1)]
-            writer = csv.DictWriter(f, fieldnames=["filename"] + pin_cols)
-            if write_header:
-                writer.writeheader()
-            writer.writerows(new_rows)
+    # Always write through save_labels so CSV is sorted consistently.
+    save_labels(labels, existing)
 
     print(f"Sheet: {image.name}  |  {len(dets)} diagrams detected")
-    print(f"  Added:    {added}  (conf ≥ {confidence_threshold:.2f})")
+    print(f"  Added:    {added}  (new, conf ≥ {confidence_threshold:.2f})")
+    if overwrite:
+        print(f"  Updated:  {updated}  (refreshed, conf ≥ {confidence_threshold:.2f})")
     print(f"  Skipped:  {skipped_low}  (conf < {confidence_threshold:.2f}) — review with `just label`")
-    print(f"  Ignored:  {skipped_dup}  (already in labels)")
-    print(f"\nTotal labeled: {len(existing_rows) + added}")
+    print(f"\nTotal labeled: {len(existing)}  (was {n_before})")
 
 
 # ── Training ──────────────────────────────────────────────────────────────
@@ -203,10 +204,17 @@ def train(
     mean_acc, std_acc = float(np.mean(accs)), float(np.std(accs))
     print(f"\nMean: loss={np.mean(losses):.4f}  acc={mean_acc:.2%} ±{std_acc:.2%}")
 
+    # Backup existing weights before overwriting so a bad retrain is recoverable.
+    output.parent.mkdir(parents=True, exist_ok=True)
+    if output.exists():
+        ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        backup = output.with_name(f"{output.stem}.{ts}.bak.pt")
+        shutil.copy2(output, backup)
+        print(f"Backed up old weights → {backup.name}")
+
     print(f"\nRetraining on all {len(all_entries)} images...")
     model, loss, _ = train_new_model(all_entries, crops, epochs, dev, SEED,
                                      desc="Final retrain", **hp)
-    output.parent.mkdir(parents=True, exist_ok=True)
     torch.save(model.state_dict(), output)
     print(f"Final loss: {loss:.4f}  →  {output.resolve()}")
 
@@ -249,6 +257,7 @@ def tune(
 
     from classify import resolve_device
     from labels import load_labels_as_list
+    from model import PinClassifier
     from training import HYPERPARAMS_PATH, split_entries, train_new_model
 
     _require(labels, "Labels", "Run `pinsheet-scanner label` first.")
@@ -289,9 +298,17 @@ def tune(
     for k, v in best.params.items():
         print(f"  {k}: {v}")
 
+    # Save hyperparams with provenance so stale configs are detectable.
+    n_params = sum(p.numel() for p in PinClassifier().parameters())
+    meta = {
+        **best.params,
+        "_tuned_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "_samples":  len(all_entries),
+        "_model_params": n_params,
+    }
     HYPERPARAMS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    HYPERPARAMS_PATH.write_text(json.dumps(best.params, indent=2) + "\n")
-    print(f"Saved to {HYPERPARAMS_PATH}")
+    HYPERPARAMS_PATH.write_text(json.dumps(meta, indent=2) + "\n")
+    print(f"Saved to {HYPERPARAMS_PATH}  (samples={len(all_entries)}, model_params={n_params})")
 
 
 # ── Extract & Label ───────────────────────────────────────────────────────
@@ -459,8 +476,17 @@ def accuracy(
     crops: CropsOpt = Path("debug_crops/raw"),
     labels: LabelsOpt = Path("debug_crops/labels.csv"),
     classifier: Annotated[Optional[Path], typer.Option(help="CNN weights (.pt).")] = None,
+    manual_only: Annotated[bool, typer.Option("--manual-only",
+        help="Evaluate only manually labeled crops (prefix = 'original_').")] = False,
+    prefix: Annotated[Optional[str], typer.Option(
+        help="Sheet prefix filter for --manual-only (default: 'original_').")] = None,
 ) -> None:
-    """Validate CNN predictions against ground-truth labels."""
+    """Validate CNN predictions against ground-truth labels.
+
+    By default all labeled crops are evaluated (593 samples).
+    Use --manual-only to evaluate only the hand-labeled 'original' sheet,
+    which gives a less inflated accuracy (pseudo-labels were set by the model).
+    """
     import cv2
 
     from classify import classify_pins_batch, load_classifier
@@ -474,6 +500,16 @@ def accuracy(
     if not label_map:
         print("No labels found.")
         return
+
+    if manual_only:
+        sheet_prefix = prefix or "original_"
+        label_map = {k: v for k, v in label_map.items() if k.startswith(sheet_prefix)}
+        if not label_map:
+            raise typer.BadParameter(
+                f"No crops with prefix '{sheet_prefix}' found. "
+                "Pass --prefix to specify a different sheet name."
+            )
+        print(f"Evaluating {len(label_map)} manually labeled crops (prefix='{sheet_prefix}')")
 
     names = sorted(label_map)
     images, valid = [], []

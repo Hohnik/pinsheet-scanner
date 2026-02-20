@@ -44,3 +44,9 @@ pythonpath = ["src"]
 markers = [
     "integration: end-to-end tests that require trained model weights",
 ]
+
+[dependency-groups]
+dev = [
+    "flameprof>=0.4",
+    "pyinstrument>=5.1.2",
+]

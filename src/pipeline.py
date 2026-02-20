@@ -3,14 +3,31 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 
 import cv2
 
 from classify import classify_pins_batch, load_classifier
 from detect import YOLOModel, crop_detections, detect_pin_diagrams, load_model, sort_detections
+from model import PinClassifier
 from ocr import cross_validate
 from preprocess import rectify_sheet
+
+
+# ── Model caches (keyed by resolved path string) ──────────────────────────
+# Loading YOLO or the CNN from disk takes ~100 ms per call.  When scanning
+# multiple sheets in sequence the same weights file is used every time —
+# cache the loaded objects so only the first call pays the I/O cost.
+
+@lru_cache(maxsize=4)
+def _cached_detector(path_str: str) -> YOLOModel:
+    return load_model(Path(path_str))
+
+
+@lru_cache(maxsize=4)
+def _cached_classifier(path_str: str) -> tuple[PinClassifier, "torch.device"]:  # noqa: F821
+    return load_classifier(Path(path_str))
 
 
 @dataclass
@@ -48,8 +65,13 @@ def process_sheet(
     model_path: Path | None = None,
     classifier_path: Path | None = None,
     confidence: float = 0.25,
+    use_ocr: bool = False,
 ) -> SheetResult:
-    """Full pipeline: load → preprocess → detect → classify → OCR-validate."""
+    """Full pipeline: load → preprocess → detect → classify → OCR-validate.
+
+    ``use_ocr=False`` (default) skips Tesseract entirely (~12× faster).
+    Pass ``use_ocr=True`` to cross-validate CNN scores against printed digits.
+    """
     classifier_path = classifier_path or DEFAULT_CLASSIFIER_PATH
 
     raw = cv2.imread(str(image_path))
@@ -61,7 +83,7 @@ def process_sheet(
     yolo: YOLOModel | None = None
     detector_path = model_path or DEFAULT_DETECTOR_PATH
     if detector_path.exists():
-        yolo = load_model(detector_path)
+        yolo = _cached_detector(str(detector_path.resolve()))
 
     sorted_dets = sort_detections(detect_pin_diagrams(yolo, rectified, confidence))
     crops = crop_detections(rectified, sorted_dets)
@@ -74,10 +96,10 @@ def process_sheet(
             f"Classifier weights not found at {classifier_path}. "
             "Train a model first (see `pinsheet-scanner train`)."
         )
-    cnn, device = load_classifier(classifier_path)
+    cnn, device = _cached_classifier(str(classifier_path.resolve()))
     classifications = classify_pins_batch(cnn, crops, device=device)
 
-    flagged = set(cross_validate(rectified, sorted_dets, classifications))
+    flagged = set(cross_validate(rectified, sorted_dets, classifications) if use_ocr else [])
 
     col_indices = {d.column for d in sorted_dets}
     result = SheetResult(

@@ -254,3 +254,71 @@ Rewrote the labeler from scratch based on user feedback.
 - `hyperparams.json` has no provenance (date, sample count, arch size)
 
 All 54 tests pass.
+
+---
+
+## 2026-02-19 — Performance profiling + remaining issue fixes
+
+### cProfile analysis
+
+Ran `scripts/profile_scan.py` (3 × `process_sheet` on sheet 001):
+
+| State | Total time | Function calls | ms/sheet |
+|-------|-----------|----------------|----------|
+| Baseline (with OCR) | 19.34 s | 4,881,452 | 6,447 ms |
+| OCR opt-in | 1.53 s | 458,522 | 510 ms |
+| + model cache + batch CPU | **1.26 s** | **72,742** | **420 ms** |
+| **Overall speedup** | **15.4×** | **67× fewer calls** | |
+
+**Root cause breakdown (baseline):**
+- `pytesseract` subprocess calls: 17.7 s (91.5%) — 270 `fork_exec` + 270 `poll` waits
+- Model reload per call: 0.35 s — both YOLO and CNN reloaded from disk on every scan
+- Per-item `.cpu()` transfers: 0.17 s — 90 transfers instead of 2
+
+**Fixes applied:**
+
+1. **OCR opt-in** (`pipeline.py`, `cli.py`, `ocr.py`)
+   Default `use_ocr=False` in `process_sheet`. CLI: `scan --ocr` to enable.
+   OCR is informational only (mismatch flags); skipping it saves 5–6 s/sheet.
+   `ocr.py` rewritten to use a **single batch tesseract call** per sheet (stack all
+   score ROIs into one image, run tesseract once with PSM 6) so enabling `--ocr`
+   is now ~10× faster than the previous per-crop approach.
+
+2. **Model LRU cache** (`pipeline.py`)
+   `_cached_detector()` and `_cached_classifier()` via `functools.lru_cache(maxsize=4)`.
+   `.to()` calls: 2133 → 18 (119×). Serialization loads: 528 → 0 per subsequent scan.
+   Cost amortised over a batch of sheets; pays once per process.
+
+3. **Batch CPU transfer** (`classify.py`)
+   `avg_cpu = avg.cpu()` + `conf_cpu = ...cpu()` — two bulk MPS→CPU transfers instead
+   of 90 per-item transfers. `.cpu()` calls: 270 → 6 (45×).
+
+### Other issue fixes (from code audit todo)
+
+4. **YOLO min-detection guard** (`detect.py`)
+   `detect_pin_diagrams(min_yolo=10)`: if YOLO returns < 10 boxes, also run
+   classical and pick whichever finds more. Prevents silent failures when YOLO
+   has low confidence on unseen sheet styles (e.g. sheet 004).
+
+5. **`collect --overwrite`** (`cli.py`)
+   New flag refreshes existing pseudo-labels after retraining. Without it,
+   pseudo-labels from the old model were never updated even when the new model
+   classifies differently. Also switched to `save_labels()` for consistent sorted CSV.
+
+6. **`accuracy --manual-only`** (`cli.py`)
+   Filter evaluation to the hand-labeled sheet only (prefix `original_`).
+   Full dataset: 593 crops, 99.7% acc (inflated by pseudo-labels).
+   Manual-only: 117 crops, 100.0% acc (honest ground truth).
+   **Side-finding**: 2 mismatches exposed the exact source of the 002 regression —
+   `002_c06_r00` and `002_c07_r00` have pin 8 wrong in pseudo-labels (model predicts
+   down=1, label says up=0 → +2 pins → 474 instead of 472).
+
+7. **Model backup before overwrite** (`cli.py` `train` command)
+   Copies `pin_classifier.pt` → `pin_classifier.YYYYMMDD_HHMMSS.bak.pt` before saving.
+
+8. **`hyperparams.json` provenance** (`cli.py` `tune` command)
+   Appends `_tuned_at`, `_samples`, `_model_params` keys. `load_hyperparams()` already
+   filters to known training keys, so metadata is ignored at load time.
+
+Flame graph saved: `flamegraph.svg`
+All 54 tests pass.

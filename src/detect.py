@@ -111,12 +111,22 @@ def detect_pin_diagrams(
     model: YOLOModel | None,
     image: np.ndarray,
     confidence_threshold: float = 0.25,
+    min_yolo: int = 10,
 ) -> list[Detection]:
-    """YOLO first (if available); classical fallback otherwise."""
+    """YOLO first (if available); classical fallback otherwise.
+
+    If YOLO returns fewer than *min_yolo* detections the classical detector
+    is also run and the result with the larger count is returned.  This guards
+    against the case where YOLO has low confidence on an unseen sheet style
+    and returns only a handful of boxes instead of the expected 90–120.
+    """
     if model is not None:
-        dets = detect_pin_diagrams_yolo(model, image, confidence_threshold)
-        if dets:
-            return dets
+        yolo_dets = detect_pin_diagrams_yolo(model, image, confidence_threshold)
+        if len(yolo_dets) >= min_yolo:
+            return yolo_dets
+        # YOLO returned suspiciously few — compare with classical
+        classical_dets = detect_pin_diagrams_classical(image)
+        return yolo_dets if len(yolo_dets) >= len(classical_dets) else classical_dets
     return detect_pin_diagrams_classical(image)
 
 
