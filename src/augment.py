@@ -3,7 +3,7 @@
 Applies realistic scan-artifact effects during training:
   - Photometric: brightness, gamma, noise, shadow gradient
   - Geometric: rotation, scale, perspective warp, aspect ratio jitter
-  - Degradation: Gaussian blur, motion blur, JPEG compression, cutout
+  - Degradation: Gaussian blur, motion blur, JPEG compression
   - Structural: grid-line remnants
 """
 
@@ -39,9 +39,6 @@ class AugmentConfig:
     motion_blur_kernels: tuple[int, ...] = (3, 5, 7)
     jpeg_probability: float = 0.2
     jpeg_quality_range: tuple[int, int] = (40, 85)
-    cutout_probability: float = 0.3
-    cutout_max_size: int = 12
-
     # Structural
     grid_line_probability: float = 0.6
     grid_intensity_range: tuple[int, int] = (100, 170)
@@ -194,19 +191,6 @@ def _apply_jpeg(img: np.ndarray, rng: np.random.Generator, cfg: AugmentConfig) -
     return cv2.imdecode(buf, cv2.IMREAD_GRAYSCALE)
 
 
-def _apply_cutout(img: np.ndarray, rng: np.random.Generator, cfg: AugmentConfig) -> np.ndarray:
-    """Erase a random rectangle — simulates smudges and partial occlusion."""
-    if cfg.cutout_max_size <= 0 or rng.random() >= cfg.cutout_probability:
-        return img
-    h, w = img.shape[:2]
-    sz = int(rng.integers(cfg.cutout_max_size // 2, cfg.cutout_max_size + 1))
-    x = int(rng.integers(0, max(1, w - sz)))
-    y = int(rng.integers(0, max(1, h - sz)))
-    out = img.copy()
-    out[y : y + sz, x : x + sz] = int(img.mean())
-    return out
-
-
 # ── Structural ─────────────────────────────────────────────────────────────
 
 
@@ -244,7 +228,6 @@ _TRANSFORMS = [
     _apply_blur,
     _apply_motion_blur,
     _apply_jpeg,
-    _apply_cutout,
 ]
 
 

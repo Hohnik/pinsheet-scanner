@@ -37,55 +37,62 @@ def _hp_keys(hp: dict) -> dict:
 
 @app.command()
 def scan(
-    image: Annotated[Path, typer.Argument(help="Path to the scanned score sheet.")],
+    images: Annotated[list[Path], typer.Argument(help="Path(s) to scanned score sheet(s).")],
     classifier: Annotated[Optional[Path], typer.Option(help="CNN weights (.pt).")] = None,
     confidence: Annotated[float, typer.Option(help="YOLO confidence threshold.")] = 0.25,
     ocr: Annotated[bool, typer.Option("--ocr/--no-ocr",
         help="Cross-validate CNN scores with Tesseract OCR (~5 s extra).")] = False,
 ) -> None:
-    """Scan a score sheet and print per-throw results.
+    """Scan one or more score sheets and print per-throw results.
 
     OCR is disabled by default (saves ~5 s/sheet).  Enable with --ocr to add
     ⚠ markers where the CNN score disagrees with the printed digit.
     """
     from pipeline import process_sheet
 
-    result = process_sheet(
-        image_path=image, classifier_path=classifier,
-        confidence=confidence, use_ocr=ocr,
-    )
-    n = len(result.throws)
-    print(f"Detected {n} throws across {result.columns} columns\n")
+    for idx, image in enumerate(images):
+        if idx > 0:
+            print("\n" + "=" * 60 + "\n")
+        if len(images) > 1:
+            print(f"Sheet: {image.name}")
+            print("-" * 40)
 
-    if not result.throws:
-        print("No pin diagrams found.")
-        return
+        result = process_sheet(
+            image_path=image, classifier_path=classifier,
+            confidence=confidence, use_ocr=ocr,
+        )
+        n = len(result.throws)
+        print(f"Detected {n} throws across {result.columns} columns\n")
 
-    for t in result.throws:
-        pins = "".join(str(p) for p in t.pins_down)
-        flag = " ⚠ OCR mismatch" if t.ocr_mismatch else ""
-        print(f"C{t.column:>2} | R{t.row:>2} | {pins} => {t.score}"
-              f" | det {t.confidence:.2f} | cls {t.classification_confidence:.2f}{flag}")
+        if not result.throws:
+            print("No pin diagrams found.")
+            continue
 
-    # Per-column summaries (Volle/Abr pairs make up a Bahn)
-    cols: dict[int, list[int]] = {}
-    for t in result.throws:
-        cols.setdefault(t.column, []).append(t.score)
-    print()
-    bahn_pairs = list(zip(sorted(cols)[::2], sorted(cols)[1::2]))
-    if bahn_pairs and all(len(cols[v]) == len(cols[a]) for v, a in bahn_pairs):
-        for v, a in bahn_pairs:
-            vt, at = sum(cols[v]), sum(cols[a])
-            print(f"Bahn (C{v}+C{a}):  Volle={vt}  Abr={at}  Total={vt + at}")
-    else:
-        for c in sorted(cols):
-            print(f"Col {c}: {sum(cols[c])}")
-    print(f"\nTotal pins knocked down: {result.total_pins}")
+        for t in result.throws:
+            pins = "".join(str(p) for p in t.pins_down)
+            flag = " ⚠ OCR mismatch" if t.ocr_mismatch else ""
+            print(f"C{t.column:>2} | R{t.row:>2} | {pins} => {t.score}"
+                  f" | det {t.confidence:.2f} | cls {t.classification_confidence:.2f}{flag}")
+
+        # Per-column summaries (Volle/Abr pairs make up a Bahn)
+        cols: dict[int, list[int]] = {}
+        for t in result.throws:
+            cols.setdefault(t.column, []).append(t.score)
+        print()
+        bahn_pairs = list(zip(sorted(cols)[::2], sorted(cols)[1::2]))
+        if bahn_pairs and all(len(cols[v]) == len(cols[a]) for v, a in bahn_pairs):
+            for v, a in bahn_pairs:
+                vt, at = sum(cols[v]), sum(cols[a])
+                print(f"Bahn (C{v}+C{a}):  Volle={vt}  Abr={at}  Total={vt + at}")
+        else:
+            for c in sorted(cols):
+                print(f"Col {c}: {sum(cols[c])}")
+        print(f"\nTotal pins knocked down: {result.total_pins}")
 
 
 @app.command()
 def collect(
-    image: Annotated[Path, typer.Argument(help="Sheet image to harvest crops from.")],
+    images: Annotated[list[Path], typer.Argument(help="Sheet image(s) to harvest crops from.")],
     crops: CropsOpt = Path("debug_crops/raw"),
     labels: LabelsOpt = Path("debug_crops/labels.csv"),
     confidence_threshold: Annotated[float, typer.Option(
@@ -94,9 +101,9 @@ def collect(
     overwrite: Annotated[bool, typer.Option("--overwrite",
         help="Replace existing pseudo-labels with fresh predictions.")] = False,
 ) -> None:
-    """Harvest high-confidence crops from a sheet into the training set.
+    """Harvest high-confidence crops from one or more sheets into the training set.
 
-    Runs detection + CNN on the sheet, then upserts any crop where the
+    Runs detection + CNN on each sheet, then upserts any crop where the
     classifier confidence exceeds --confidence-threshold into labels.csv.
     Use --overwrite to refresh existing pseudo-labels after retraining.
     Review low-confidence crops with `pinsheet-scanner label` afterwards.
@@ -107,48 +114,59 @@ def collect(
     from labels import load_labels_as_dict, save_labels
     from pipeline import DEFAULT_CLASSIFIER_PATH
 
-    _require(image, "Image")
     _require(DEFAULT_CLASSIFIER_PATH, "Classifier weights", "Train a model first.")
     crops.mkdir(parents=True, exist_ok=True)
 
     existing = load_labels_as_dict(labels)
     n_before = len(existing)
-
-    rectified, dets, raw_crops = _detect_and_crop(image, confidence)
-    if not dets:
-        print("No pin diagrams detected.")
-        return
+    total_added = total_updated = total_skipped = total_dets = 0
 
     cnn, dev = load_classifier(DEFAULT_CLASSIFIER_PATH)
-    classifications = classify_pins_batch(cnn, raw_crops, device=dev)
 
-    stem = image.stem
-    added = updated = skipped_low = 0
+    for image in images:
+        _require(image, "Image")
+        rectified, dets, raw_crops = _detect_and_crop(image, confidence)
+        if not dets:
+            print(f"{image.name}: no pin diagrams detected")
+            continue
 
-    for det, crop, (pins, conf) in zip(dets, raw_crops, classifications):
-        name = f"{stem}_c{det.column:02d}_r{det.row:02d}.png"
-        already_labeled = name in existing
-        if conf < confidence_threshold:
-            skipped_low += 1
-            continue
-        if already_labeled and not overwrite:
-            continue
-        cv2.imwrite(str(crops / name), crop)
-        if already_labeled:
-            existing[name] = pins
-            updated += 1
-        else:
-            existing[name] = pins
-            added += 1
+        classifications = classify_pins_batch(cnn, raw_crops, device=dev)
+        stem = image.stem
+        added = updated = skipped_low = 0
+
+        for det, crop, (pins, conf) in zip(dets, raw_crops, classifications):
+            name = f"{stem}_c{det.column:02d}_r{det.row:02d}.png"
+            already_labeled = name in existing
+            if conf < confidence_threshold:
+                skipped_low += 1
+                continue
+            if already_labeled and not overwrite:
+                continue
+            cv2.imwrite(str(crops / name), crop)
+            if already_labeled:
+                existing[name] = pins
+                updated += 1
+            else:
+                existing[name] = pins
+                added += 1
+
+        total_dets += len(dets)
+        total_added += added
+        total_updated += updated
+        total_skipped += skipped_low
+        print(f"{image.name}: {len(dets)} detected, +{added} added"
+              + (f", ~{updated} updated" if overwrite and updated else "")
+              + (f", {skipped_low} low-conf" if skipped_low else ""))
 
     # Always write through save_labels so CSV is sorted consistently.
     save_labels(labels, existing)
 
-    print(f"Sheet: {image.name}  |  {len(dets)} diagrams detected")
-    print(f"  Added:    {added}  (new, conf ≥ {confidence_threshold:.2f})")
+    print(f"\n{'─' * 40}")
+    print(f"Sheets: {len(images)}  |  Diagrams: {total_dets}")
+    print(f"  Added:    {total_added}  (new, conf ≥ {confidence_threshold:.2f})")
     if overwrite:
-        print(f"  Updated:  {updated}  (refreshed, conf ≥ {confidence_threshold:.2f})")
-    print(f"  Skipped:  {skipped_low}  (conf < {confidence_threshold:.2f}) — review with `just label`")
+        print(f"  Updated:  {total_updated}  (refreshed, conf ≥ {confidence_threshold:.2f})")
+    print(f"  Skipped:  {total_skipped}  (conf < {confidence_threshold:.2f}) — review with `just label`")
     print(f"\nTotal labeled: {len(existing)}  (was {n_before})")
 
 

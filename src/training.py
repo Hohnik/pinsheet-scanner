@@ -39,8 +39,6 @@ _TRAIN_AUGMENT = AugmentConfig(
     grid_line_probability=0.4,
     grid_intensity_range=(90, 180),
     gamma_range=(0.5, 2.0),
-    cutout_probability=0.35,
-    cutout_max_size=14,
 )
 
 

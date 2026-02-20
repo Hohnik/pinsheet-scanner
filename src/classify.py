@@ -26,7 +26,6 @@ _TTA_CFG = AugmentConfig(
     scale_range=(0.95, 1.05),
     grid_line_probability=0.0,
     # Training-only augmentations — disabled at inference time.
-    cutout_probability=0.0,
     gamma_range=(1.0, 1.0),
     shadow_probability=0.0,
     aspect_jitter=(1.0, 1.0),

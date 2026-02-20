@@ -496,3 +496,19 @@ Existing: brightness, gamma, noise, Gaussian blur, rotation, scale, grid lines, 
 
 TTA config updated to disable all training-only augmentations at inference.
 All 54 tests passing.
+
+---
+
+## 2026-02-20 — Remove cutout augmentation, multi-image CLI
+
+**Cutout removed**: Cutout can occlude pins, forcing the model to guess during
+training — this teaches noise rather than signal. Removed entirely from
+`AugmentConfig`, training config, TTA config, and pipeline.
+
+**Multi-image `scan` and `collect`**: Both commands now accept `IMAGES...`
+(one or more paths). Shell glob works out of the box:
+- `just scan sheets/*`
+- `just collect sheets/* --overwrite`
+
+Justfile recipes updated to `*args` passthrough.
+54 tests passing.

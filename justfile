@@ -29,13 +29,13 @@ tune *args:
 train-detector *args:
     uv run pinsheet-scanner train-detector {{ args }}
 
-# Scan a score sheet and print results
-scan image *args:
-    uv run pinsheet-scanner scan {{ image }} {{ args }}
+# Scan one or more score sheets and print results
+scan *args:
+    uv run pinsheet-scanner scan {{ args }}
 
-# Harvest high-confidence crops from a sheet into the training set
-collect image *args:
-    uv run pinsheet-scanner collect {{ image }} {{ args }}
+# Harvest high-confidence crops from sheet(s) into the training set
+collect *args:
+    uv run pinsheet-scanner collect {{ args }}
 
 # Extract crops from a score sheet image
 extract image *args:
