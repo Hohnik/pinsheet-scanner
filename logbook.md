@@ -406,3 +406,33 @@ Score sheets use "1:" notation (digit + colon for Fehlwurf markers). PSM 10
 
 **Result:** 82/90 correct matches, 4 unreadable, 4 false mismatches (tesseract
 misreads of small handwritten digits). Was 60 false mismatches before.
+
+---
+
+## 2026-02-19 — OCR accuracy: 0 false flags on 001, catches real errors on 002
+
+Three fixes combined to make OCR cross-validation actually useful:
+
+1. **No binarization** — feed upscaled grayscale to tesseract, fall back to
+   Otsu binary only if grayscale returns nothing. Binarization was destroying
+   subtle stroke detail and causing "1"→"4" misreads.
+
+2. **Higher upscale** (target_h 48→96) — at 2× upscale tesseract misread
+   small printed digits; at 3× they're resolved cleanly.
+
+3. **Confidence filtering** (≥60) — use `image_to_data` instead of
+   `image_to_string` to get per-character confidence scores. Low-confidence
+   reads (tesseract guessing on faint glyphs) are ignored.
+
+Results across all sheets:
+
+| Sheet | OCR match | False flags | True flags | Unread |
+|-------|-----------|-------------|------------|--------|
+| 001   | 78        | 0           | 0          | 12     |
+| 002   | 91        | 2           | **2** ✓    | 25     |
+| 003   | 94        | 1           | 0          | 25     |
+| 005   | 98        | 0           | 0          | 22     |
+
+The 2 true flags on 002 are C6R0 (ocr=3 cnn=4) and C7R0 (ocr=6 cnn=7) —
+exactly the 2 known CNN errors from wrong pseudo-labels (pin 8).
+OCR correctly identifies real classification errors.
