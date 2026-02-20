@@ -63,4 +63,5 @@ data/classifier/
 # Profiling output (generated, not version-controlled)
 *.prof
 flamegraph.svg
+flamegraph.html
 *.bak.pt

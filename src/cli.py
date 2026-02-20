@@ -386,7 +386,13 @@ def extract(
 
 @app.command()
 def label(crops: CropsOpt = Path("debug_crops/raw")) -> None:
-    """Open browser labeling UI (crops sorted by ascending CNN confidence)."""
+    """Open browser labeling UI.
+
+    Crops are sorted so the most likely errors appear first:
+      1. Labeled crops where the model DISAGREES (descending model confidence)
+      2. Unlabeled crops (ascending confidence — least certain first)
+      3. Labeled crops where the model agrees (ascending confidence)
+    """
     import json as _json
     import webbrowser
     from http.server import HTTPServer, SimpleHTTPRequestHandler
@@ -405,7 +411,6 @@ def label(crops: CropsOpt = Path("debug_crops/raw")) -> None:
 
     labels_path = crops.parent / "labels.csv"
     existing = load_labels_as_dict(labels_path)
-    print(f"{len(all_names)} crops, {sum(1 for n in all_names if n in existing)} labeled")
 
     predictions: dict[str, dict] = {}
     if DEFAULT_CLASSIFIER_PATH.exists():
@@ -414,7 +419,28 @@ def label(crops: CropsOpt = Path("debug_crops/raw")) -> None:
         for name, (pins, conf) in zip(all_names, classify_pins_batch(cnn, imgs, device=dev)):
             predictions[name] = {"pins": pins, "conf": round(conf, 4)}
 
-    crop_names = sorted(all_names, key=lambda n: (n in existing, predictions.get(n, {}).get("conf", 1.0)))
+    # Sort: disagreements first, then unlabeled, then agreements.
+    def _sort_key(name: str) -> tuple:
+        pred = predictions.get(name)
+        conf = pred["conf"] if pred else 1.0
+        lbl  = existing.get(name)
+        if lbl is not None and pred is not None:
+            disagrees = pred["pins"] != lbl
+            if disagrees:
+                return (0, -conf)   # group 0: disagree, highest conf first
+            return (2, conf)        # group 2: agree, lowest conf first
+        if lbl is None:
+            return (1, conf)        # group 1: unlabeled, lowest conf first
+        return (2, conf)            # labeled but no model → tail
+
+    crop_names = sorted(all_names, key=_sort_key)
+
+    # Count groups for the startup message.
+    n_disagree = sum(1 for n in all_names
+                     if n in existing and n in predictions and predictions[n]["pins"] != existing[n])
+    n_unlabeled = sum(1 for n in all_names if n not in existing)
+    print(f"{len(all_names)} crops: {n_disagree} disagree, {n_unlabeled} unlabeled, "
+          f"{len(all_names) - n_disagree - n_unlabeled} agree")
     html = (Path(__file__).parent / "labeler.html").read_text()
 
     def make_handler():

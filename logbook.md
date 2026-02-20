@@ -322,3 +322,47 @@ Ran `scripts/profile_scan.py` (3 × `process_sheet` on sheet 001):
 
 Flame graph saved: `flamegraph.svg`
 All 54 tests pass.
+
+---
+
+## 2026-02-19 — Labeler sort order, OCR parallelization, flame graph fix
+
+### Labeler: smart sort order + visual improvements
+
+**Sort priority** (server-side in `cli.py`, shown to user in HTML):
+1. **Labeled + model disagrees** → sorted by model confidence DESC
+   (high-conf disagreement = almost certainly a label error)
+2. **Unlabeled** → sorted by confidence ASC (least certain first)
+3. **Labeled + model agrees** → sorted by confidence ASC (marginal cases)
+
+Startup message now prints: `593 crops: 2 disagree, 0 unlabeled, 591 agree`
+
+**Visual tag** on each crop: red `MODEL DISAGREES` / grey `UNLABELED` / nothing
+for agreed items. User sees the 2 wrong pseudo-labels immediately at the top.
+
+**Pin overlay transparency** reduced: `rgba(46, 111, 255, 0.22)` background and
+`rgba(100, 160, 255, 0.55)` border (was 0.45 / 0.9). Image behind pins now
+clearly visible.
+
+### OCR: hybrid batch + parallel → 14.5× faster
+
+| Approach | Time | Notes |
+|----------|------|-------|
+| Serial (old) | 5,900 ms | 90 subprocess spawns |
+| Parallel threads (8) | 1,600 ms | GIL + macOS fork overhead |
+| Batch stack (single call) | 200 ms | ~10% ambiguous results |
+| **Hybrid (batch + retry)** | **406 ms** | Batch first, parallel retry for Nones |
+
+Implementation: `_batch_ocr` stacks all ROIs with full-height white separators,
+runs tesseract once (PSM 6). Any ROI that returns `None` or multi-digit is retried
+individually via `ThreadPoolExecutor(max_workers=8)`. Net: **14.5× faster than
+the original serial approach**, and robust (no lost results).
+
+### Flame graph: fixed
+
+`flameprof` crashed with `ZeroDivisionError` on the profile data (known bug).
+Replaced with `pyinstrument` which generates an **interactive HTML flame graph**
+(`flamegraph.html`, 209 KB) — much better than static SVG anyway.
+Profiling script updated to produce both cProfile `.prof` and pyinstrument HTML.
+
+All 54 tests pass.

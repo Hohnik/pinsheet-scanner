@@ -20,7 +20,7 @@
     user-select: none;
   }
 
-  /* ── Top bar: filename  ·  position counter  ·  speed ───────────────── */
+  /* ── Top bar ─────────────────────────────────────────────────────────── */
   .topbar {
     width: 320px;
     display: flex;
@@ -28,15 +28,25 @@
     align-items: flex-start;
     font-size: 0.75rem;
   }
+  .tb-left { max-width: 200px; }
   .tb-name {
     font-family: monospace;
     color: #444;
-    max-width: 180px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
   .tb-name.is-labeled { color: #3c9; }
+  .tb-tag {
+    display: inline-block;
+    font-size: 0.6rem;
+    font-weight: 700;
+    padding: 1px 5px;
+    border-radius: 3px;
+    margin-top: 2px;
+  }
+  .tb-tag.disagree { background: #a33; color: #fff; }
+  .tb-tag.unlabeled { background: #555; color: #ddd; }
 
   .tb-right {
     text-align: right;
@@ -61,11 +71,6 @@
   }
 
   /* ── Image + pin dot overlay ─────────────────────────────────────────── */
-  /*
-     The img-wrap is fixed 300×300 so percentage-based pin positions always
-     map to the same spot regardless of the underlying image load state.
-     Pin positions (PIN_FRAC) are derived from model.py PIN_COORDS / 64.
-  */
   .img-wrap {
     position: relative;
     width: 300px;
@@ -81,26 +86,25 @@
     border: 1px solid #1a1a1a;
   }
 
-  /* Clickable circles overlaid at exact pin positions */
+  /* Clickable circles — subtle outline when up, transparent fill when down */
   .pin-dot {
     position: absolute;
     width: 34px;
     height: 34px;
     border-radius: 50%;
-    /* centre the dot on the pin coordinate */
     transform: translate(-50%, -50%);
     cursor: pointer;
-    border: 2px solid rgba(255, 255, 255, 0.12);
+    border: 2px solid rgba(255, 255, 255, 0.10);
     background: transparent;
     transition: background 0.08s, border-color 0.08s;
   }
-  .pin-dot:hover { border-color: rgba(255, 255, 255, 0.35); }
+  .pin-dot:hover { border-color: rgba(255, 255, 255, 0.30); }
   .pin-dot.down {
-    background: rgba(46, 111, 255, 0.45);
-    border-color: rgba(100, 160, 255, 0.9);
+    background: rgba(46, 111, 255, 0.22);
+    border-color: rgba(100, 160, 255, 0.55);
   }
 
-  /* ── Large score readout ─────────────────────────────────────────────── */
+  /* ── Score ───────────────────────────────────────────────────────────── */
   .score {
     font-size: 2.2rem;
     font-weight: 700;
@@ -109,7 +113,7 @@
     line-height: 1;
   }
 
-  /* ── Navigation buttons ──────────────────────────────────────────────── */
+  /* ── Navigation ──────────────────────────────────────────────────────── */
   .nav { display: flex; gap: 8px; }
   .nav button {
     padding: 9px 32px;
@@ -126,92 +130,70 @@
   .btn-next { background: #2e6fff; color: #fff; letter-spacing: 0.02em; }
   .btn-next:hover { background: #4880ff; }
 
-  /* ── Status flash ────────────────────────────────────────────────────── */
+  /* ── Status ──────────────────────────────────────────────────────────── */
   .status {
     height: 1em;
     font-size: 0.72rem;
     color: #3c9;
     transition: opacity 0.4s;
   }
-
-  /* ── Footer hint ─────────────────────────────────────────────────────── */
   .keys { font-size: 0.6rem; color: #222; letter-spacing: 0.02em; }
 </style>
 </head>
 <body>
 
-<!-- Stats bar -->
 <div class="topbar">
-  <span class="tb-name" id="tb-name">—</span>
+  <div class="tb-left">
+    <div class="tb-name" id="tb-name">—</div>
+    <div id="tb-tag"></div>
+  </div>
   <div class="tb-right">
     <div id="tb-pos">— / —</div>
     <div class="speed" id="tb-speed"></div>
   </div>
 </div>
 
-<!-- Progress -->
 <div class="progress-bar">
   <div class="progress-fill" id="prog"></div>
 </div>
 
-<!-- Crop image with pin overlay (dots injected by JS) -->
 <div class="img-wrap" id="img-wrap">
   <img class="crop-img" id="crop-img" src="" alt="crop">
 </div>
 
-<!-- Pin-count score -->
 <div class="score" id="score">0</div>
 
-<!-- Navigation (both buttons save first) -->
 <div class="nav">
   <button class="btn-prev" id="btn-prev">← Back</button>
   <button class="btn-next" id="btn-next">Next →</button>
 </div>
 
 <div class="status" id="status"></div>
-<div class="keys">← → &nbsp;save &amp; navigate &nbsp;·&nbsp; Enter = next &nbsp;·&nbsp; click a dot to toggle pin</div>
+<div class="keys">← → &nbsp;save &amp; navigate &nbsp;·&nbsp; Enter = next &nbsp;·&nbsp; click a dot to toggle</div>
 
 <script>
-// ── Data injected server-side ─────────────────────────────────────────────
-// Crops are pre-sorted: unlabeled first (ascending CNN confidence), then labeled.
 const CROPS       = /*CROPS_JSON*/;
 const PREDICTIONS = /*PREDICTIONS_JSON*/;
 const LABELS      = /*LABELS_JSON*/;
 
-// ── Pin positions ─────────────────────────────────────────────────────────
-// Derived from model.py PIN_COORDS (cx, cy) / 64  →  fraction of image size.
-// Layout (front = 0, back = 8):
-//        8
-//      6   7
-//    3   4   5
-//      1   2
-//        0
 const PIN_FRAC = [
-  [32 / 64, 56 / 64],  // 0  front
-  [20 / 64, 44 / 64],  // 1
-  [44 / 64, 44 / 64],  // 2
-  [ 8 / 64, 32 / 64],  // 3
-  [32 / 64, 32 / 64],  // 4
-  [56 / 64, 32 / 64],  // 5
-  [20 / 64, 20 / 64],  // 6
-  [44 / 64, 20 / 64],  // 7
-  [32 / 64,  8 / 64],  // 8  back
+  [32/64, 56/64], [20/64, 44/64], [44/64, 44/64],
+  [ 8/64, 32/64], [32/64, 32/64], [56/64, 32/64],
+  [20/64, 20/64], [44/64, 20/64], [32/64,  8/64],
 ];
 
-// ── Session state ─────────────────────────────────────────────────────────
 let idx = (() => {
   for (let i = 0; i < CROPS.length; i++) {
     if (!LABELS[CROPS[i]]) return i;
   }
-  return 0; // all labeled → start at 0
+  // All labeled — start at first disagreement (they're sorted first).
+  return 0;
 })();
 
 let pins         = Array(9).fill(0);
-let sessionStart = null;   // set on first save
+let sessionStart = null;
 let sessionSaves = 0;
 let statusTimer  = null;
-
-// ── Helpers ───────────────────────────────────────────────────────────────
 
 function labeledCount() { return Object.keys(LABELS).length; }
 
@@ -219,6 +201,15 @@ function getInitialPins(name) {
   if (LABELS[name]) return [...LABELS[name]];
   const p = PREDICTIONS[name];
   return p ? [...p.pins] : Array(9).fill(0);
+}
+
+// Does the model disagree with the current saved label?
+function getStatus(name) {
+  const lbl  = LABELS[name];
+  const pred = PREDICTIONS[name];
+  if (!lbl)                             return "unlabeled";
+  if (pred && pred.pins.some((v, i) => v !== lbl[i])) return "disagree";
+  return "ok";
 }
 
 // ── Pin overlay ───────────────────────────────────────────────────────────
@@ -231,7 +222,6 @@ function buildPinDots() {
     const dot = document.createElement("div");
     dot.className = "pin-dot" + (pins[i] ? " down" : "");
     dot.id = "p" + i;
-    // percentage positioning relative to img-wrap (300×300 px)
     dot.style.left = (fx * 100).toFixed(3) + "%";
     dot.style.top  = (fy * 100).toFixed(3) + "%";
     const pi = i;
@@ -249,39 +239,46 @@ function togglePin(i) {
 // ── Render ────────────────────────────────────────────────────────────────
 
 function render() {
-  const name  = CROPS[idx];
-  const n     = CROPS.length;
-  const done  = labeledCount();
-  const isLabeled = !!LABELS[name];
+  const name = CROPS[idx];
+  const n    = CROPS.length;
+  const done = labeledCount();
+  const st   = getStatus(name);
 
   pins = getInitialPins(name);
 
-  // Topbar
+  // Name + status tag
   const tbName = document.getElementById("tb-name");
-  tbName.textContent = name + (isLabeled ? " ✓" : "");
-  tbName.className = "tb-name" + (isLabeled ? " is-labeled" : "");
+  tbName.textContent = name + (LABELS[name] ? " ✓" : "");
+  tbName.className = "tb-name" + (LABELS[name] ? " is-labeled" : "");
 
+  const tag = document.getElementById("tb-tag");
+  if (st === "disagree") {
+    tag.innerHTML = '<span class="tb-tag disagree">MODEL DISAGREES</span>';
+  } else if (st === "unlabeled") {
+    tag.innerHTML = '<span class="tb-tag unlabeled">UNLABELED</span>';
+  } else {
+    tag.innerHTML = "";
+  }
+
+  // Counter
   document.getElementById("tb-pos").textContent =
     `${idx + 1} / ${n}  ·  ${done} labeled`;
 
-  // Progress bar
+  // Progress
   document.getElementById("prog").style.width = (done / n * 100).toFixed(2) + "%";
 
-  // Image
+  // Image + score + pins
   document.getElementById("crop-img").src = "/crop/" + name;
-
-  // Score
   document.getElementById("score").textContent = pins.reduce((a, b) => a + b, 0);
 
   // Nav
   document.getElementById("btn-prev").disabled = idx === 0;
   document.getElementById("btn-next").disabled = idx >= n - 1;
 
-  // Pin overlay
   buildPinDots();
 }
 
-// ── Speed ticker (runs every 500 ms) ─────────────────────────────────────
+// ── Speed ticker ──────────────────────────────────────────────────────────
 
 setInterval(() => {
   if (!sessionStart || sessionSaves === 0) return;
@@ -308,13 +305,11 @@ async function saveAndGo(delta) {
     flash("✓");
   } catch (e) {
     flash("Error: " + e.message, true);
-    return; // don't navigate on save failure
+    return;
   }
 
   const next = idx + delta;
-  if (next >= 0 && next < CROPS.length) {
-    idx = next;
-  }
+  if (next >= 0 && next < CROPS.length) idx = next;
   render();
 }
 
@@ -330,19 +325,12 @@ function flash(msg, err = false) {
 // ── Keyboard ──────────────────────────────────────────────────────────────
 
 document.addEventListener("keydown", e => {
-  if (e.key === "ArrowRight" || e.key === "Enter") {
-    e.preventDefault();
-    saveAndGo(1);
-  } else if (e.key === "ArrowLeft") {
-    e.preventDefault();
-    saveAndGo(-1);
-  }
+  if (e.key === "ArrowRight" || e.key === "Enter") { e.preventDefault(); saveAndGo(1); }
+  else if (e.key === "ArrowLeft") { e.preventDefault(); saveAndGo(-1); }
 });
 
 document.getElementById("btn-next").addEventListener("click", () => saveAndGo(1));
 document.getElementById("btn-prev").addEventListener("click", () => saveAndGo(-1));
-
-// ── Boot ──────────────────────────────────────────────────────────────────
 
 render();
 </script>

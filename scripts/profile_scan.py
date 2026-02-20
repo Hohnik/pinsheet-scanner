@@ -1,4 +1,9 @@
-"""cProfile the full scan pipeline on sheet 001, dump .prof + flame graph SVG."""
+"""Profile the full scan pipeline on sheet 001.
+
+Generates:
+  profile.prof     — cProfile binary (for pstats / snakeviz)
+  flamegraph.html  — pyinstrument interactive flame graph
+"""
 
 import cProfile
 import pstats
@@ -8,40 +13,43 @@ from pathlib import Path
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from pipeline import process_sheet  # noqa: E402 (path set above)
+from pipeline import process_sheet  # noqa: E402
 
-SHEET    = ROOT / "sheets" / "001.jpeg"
+SHEET = ROOT / "sheets" / "001.jpeg"
 PROF_OUT = ROOT / "profile.prof"
-SVG_OUT  = ROOT / "flamegraph.svg"
+FLAME_OUT = ROOT / "flamegraph.html"
 
 
 def main() -> None:
-    # Warm-up: load models + JIT so timing reflects steady state
+    # ── cProfile (totals) ──────────────────────────────────────────────────
+    # Warm-up: load models so timing reflects steady state
     process_sheet(SHEET)
 
     pr = cProfile.Profile()
     pr.enable()
-    for _ in range(3):          # 3 reps to smooth noise
+    for _ in range(3):
         process_sheet(SHEET)
     pr.disable()
 
     pr.dump_stats(str(PROF_OUT))
-    print(f"Profile saved → {PROF_OUT}")
+    print(f"cProfile saved → {PROF_OUT}")
 
-    # Top-30 by cumulative time
     stats = pstats.Stats(str(PROF_OUT), stream=sys.stdout)
     stats.strip_dirs()
     stats.sort_stats("cumulative")
-    stats.print_stats(40)
+    stats.print_stats(30)
 
-    # Flame graph
-    import subprocess
-    result = subprocess.run(
-        [sys.executable, "-m", "flameprof", str(PROF_OUT)],
-        capture_output=True, text=True,
-    )
-    SVG_OUT.write_text(result.stdout)
-    print(f"\nFlame graph → {SVG_OUT}")
+    # ── pyinstrument flame graph (single run, wall-clock) ──────────────────
+    from pyinstrument import Profiler
+
+    profiler = Profiler()
+    profiler.start()
+    process_sheet(SHEET)
+    profiler.stop()
+
+    FLAME_OUT.write_text(profiler.output_html())
+    print(f"\nFlame graph → {FLAME_OUT}")
+    print(profiler.output_text(unicode=True, color=False))
 
 
 if __name__ == "__main__":

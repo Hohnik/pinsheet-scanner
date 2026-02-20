@@ -1,24 +1,25 @@
 """OCR cross-validation of CNN pin-count predictions.
 
 Reads the printed score digit adjacent to each pin diagram via Tesseract.
-Disabled by default in the scan pipeline (pass ``use_ocr=True`` to enable).
+Disabled by default (pass ``use_ocr=True`` to ``process_sheet`` to enable).
 
-Performance note: the naive approach calls tesseract once per diagram
-(90 subprocess spawns ~= 5 s/sheet).  ``cross_validate`` instead stitches
-all score regions into a single image and calls tesseract once, reducing
-OCR time to ~100 ms/sheet.
+Strategy: stack all score regions into one image → one tesseract call (~200 ms).
+Fall back to parallel per-ROI calls for any rows that produce ambiguous output.
+Total overhead: ~200–400 ms/sheet instead of ~6 s serial.
 """
 
 from __future__ import annotations
+
+from concurrent.futures import ThreadPoolExecutor
 
 import cv2
 import numpy as np
 
 from detect import Detection
 
-# Single-digit whitelist; PSM 7 = single text line per call (legacy),
-# PSM 6 = assume uniform block of text (batch call).
 _TSR_CFG_BATCH = "--oem 3 --psm 6 -c tessedit_char_whitelist=0123456789"
+_TSR_CFG_SINGLE = "--oem 3 --psm 10 -c tessedit_char_whitelist=0123456789"
+_WORKERS = 8
 
 
 def _has_tesseract() -> bool:
@@ -33,8 +34,7 @@ def _score_roi(gray: np.ndarray, det: Detection) -> np.ndarray | None:
     """Extract and upscale the score region to the left of a detection."""
     x0 = max(0, int(det.x_min - det.width * 1.5))
     x1 = max(0, int(det.x_min - det.width * 0.1))
-    y0 = max(0, det.y_min)
-    y1 = min(gray.shape[0], det.y_max)
+    y0, y1 = max(0, det.y_min), min(gray.shape[0], det.y_max)
     if x1 <= x0 or y1 <= y0:
         return None
     roi = gray[y0:y1, x0:x1]
@@ -47,37 +47,35 @@ def _score_roi(gray: np.ndarray, det: Detection) -> np.ndarray | None:
     return binary
 
 
-def cross_validate(
-    gray: np.ndarray,
-    detections: list[Detection],
-    predictions: list[tuple[list[int], float]],
-) -> list[int]:
-    """Return indices where ``sum(cnn_pins) != ocr_score``.
+def _parse_digit(text: str) -> int | None:
+    """Extract a single digit 0-9 from OCR text, or None."""
+    digits = "".join(c for c in text if c.isdigit())
+    if len(digits) == 1:
+        return int(digits)
+    return None
 
-    All score regions are stitched into a single image and Tesseract is called
-    **once** per sheet instead of once per diagram.  Falls back to an empty
-    list when pytesseract / tesseract is unavailable.
+
+def _ocr_one(binary: np.ndarray) -> int | None:
+    """Run tesseract on a single ROI.  Thread-safe."""
+    import pytesseract
+    try:
+        text = pytesseract.image_to_string(binary, config=_TSR_CFG_SINGLE).strip()
+    except Exception:
+        return None
+    return _parse_digit(text)
+
+
+def _batch_ocr(rois: list[np.ndarray]) -> list[int | None]:
+    """Stack ROIs into one image, run tesseract once (~200 ms).
+
+    Returns a list aligned with *rois*.  Entries are ``None`` where
+    tesseract produced no digit or an ambiguous result.
     """
-    if not _has_tesseract():
-        return []
     import pytesseract
 
-    # --- Extract ROIs; track which detection index each belongs to ----------
-    rois: list[np.ndarray] = []
-    det_indices: list[int] = []
-    for idx, det in enumerate(detections):
-        roi = _score_roi(gray, det)
-        if roi is not None:
-            rois.append(roi)
-            det_indices.append(idx)
-
-    if not rois:
-        return []
-
-    # --- Normalise heights and stack vertically with separator rows ----------
     target_h = max(r.shape[0] for r in rois)
-    max_w    = max(r.shape[1] for r in rois)
-    sep_h    = max(4, target_h // 6)   # white gap between rows
+    max_w = max(r.shape[1] for r in rois)
+    sep_h = target_h  # full-height separator to prevent merging
 
     strips: list[np.ndarray] = []
     for roi in rois:
@@ -88,35 +86,64 @@ def cross_validate(
         strips.append(padded)
         strips.append(np.full((sep_h, max_w), 255, dtype=np.uint8))
 
-    stacked = np.vstack(strips)
-
-    # --- One tesseract call for the whole sheet ------------------------------
     try:
-        raw = pytesseract.image_to_string(stacked, config=_TSR_CFG_BATCH)
+        raw = pytesseract.image_to_string(np.vstack(strips), config=_TSR_CFG_BATCH)
     except Exception:
+        return [None] * len(rois)
+
+    # Parse non-blank lines.
+    parsed: list[int | None] = []
+    for line in raw.splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        parsed.append(_parse_digit(s))
+
+    # Pad / truncate to match input length (tesseract may skip blank regions).
+    while len(parsed) < len(rois):
+        parsed.append(None)
+    return parsed[:len(rois)]
+
+
+def cross_validate(
+    gray: np.ndarray,
+    detections: list[Detection],
+    predictions: list[tuple[list[int], float]],
+) -> list[int]:
+    """Return indices where ``sum(cnn_pins) != ocr_score``.
+
+    Fast path: one tesseract call for all ROIs (~200 ms).
+    Fallback: parallel per-ROI calls for ambiguous results (~65 ms each, 8 threads).
+    """
+    if not _has_tesseract():
         return []
 
-    # Parse non-empty lines; tesseract may produce fewer lines than rois if
-    # it merges or skips regions, so zip safely.
-    ocr_digits: list[int | None] = []
-    for line in raw.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        digits = "".join(c for c in stripped if c.isdigit())
-        if digits:
-            val = int(digits[-1])   # take last digit (handles e.g. "9\n9")
-            ocr_digits.append(val if 0 <= val <= 9 else None)
-        else:
-            ocr_digits.append(None)
+    # Extract ROIs.
+    tasks: list[tuple[int, np.ndarray]] = []
+    for idx, det in enumerate(detections):
+        roi = _score_roi(gray, det)
+        if roi is not None:
+            tasks.append((idx, roi))
+    if not tasks:
+        return []
 
-    # --- Cross-reference with CNN predictions --------------------------------
-    flagged: list[int] = []
-    for (det_idx, ocr_val) in zip(det_indices, ocr_digits):
-        if ocr_val is None:
-            continue
-        pins, _ = predictions[det_idx]
-        if sum(pins) != ocr_val:
-            flagged.append(det_idx)
+    det_indices = [t[0] for t in tasks]
+    rois = [t[1] for t in tasks]
 
-    return flagged
+    # Fast batch pass.
+    results = _batch_ocr(rois)
+
+    # Find ambiguous entries (None) and retry them in parallel.
+    retry = [(i, rois[i]) for i, v in enumerate(results) if v is None]
+    if retry:
+        with ThreadPoolExecutor(max_workers=_WORKERS) as pool:
+            retried = list(pool.map(lambda t: _ocr_one(t[1]), retry))
+        for (slot, _), val in zip(retry, retried):
+            results[slot] = val
+
+    # Cross-reference.
+    return [
+        det_indices[i]
+        for i, ocr_val in enumerate(results)
+        if ocr_val is not None and sum(predictions[det_indices[i]][0]) != ocr_val
+    ]
